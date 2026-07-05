@@ -1,0 +1,107 @@
+package com.routersync.app.work
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
+import androidx.work.WorkerParameters
+import com.routersync.app.R
+import com.routersync.app.data.AppDatabase
+import com.routersync.app.data.ScheduleType
+import com.routersync.app.sync.SyncEngine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/**
+ * Esegue la sincronizzazione di un singolo [SyncProfile]. Viene lanciato sia dalle
+ * pianificazioni ricorrenti (WorkManager PeriodicWorkRequest) sia dal tasto di sync manuale.
+ */
+class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+
+    companion object {
+        const val KEY_PROFILE_ID = "profile_id"
+        private const val CHANNEL_ID = "sync_channel"
+        private const val NOTIFICATION_ID = 42
+    }
+
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val profileId = inputData.getLong(KEY_PROFILE_ID, -1L)
+        if (profileId == -1L) return@withContext Result.failure()
+
+        setForeground(createForegroundInfo("Avvio sincronizzazione…"))
+
+        val dao = AppDatabase.getInstance(applicationContext).syncProfileDao()
+        val profile = dao.getById(profileId) ?: return@withContext Result.failure()
+
+        val engine = SyncEngine(applicationContext)
+        val result = engine.run(
+            profile = profile,
+            onProgress = { current, done, total ->
+                // Aggiorna la notifica con il progresso (best-effort, non blocca in caso di errore)
+                runCatching {
+                    val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    nm.notify(NOTIFICATION_ID, buildNotification("Sincronizzo: $current", done, total))
+                }
+            },
+            isCancelled = { isStopped }
+        )
+
+        dao.updateSyncResult(
+            id = profile.id,
+            timestamp = System.currentTimeMillis(),
+            status = when {
+                result.cancelled -> "Interrotta dall'utente - ${result.filesTransferred} file trasferiti"
+                result.success -> "OK - ${result.filesTransferred} file trasferiti"
+                else -> result.message
+            }
+        )
+        result.updatedManifest?.let { manifest ->
+            dao.updateManifest(profile.id, manifest)
+        }
+
+        // Se lo schedule è mensile, WorkManager non supporta un intervallo nativo:
+        // ri-pianifichiamo qui il prossimo OneTimeWorkRequest.
+        if (profile.scheduleType == ScheduleType.MONTHLY) {
+            SyncScheduler(applicationContext).scheduleMonthly(profile)
+        }
+
+        when {
+            result.cancelled -> Result.success() // interrotto volontariamente: non va ritentato in automatico
+            result.success -> Result.success()
+            else -> Result.retry()
+        }
+    }
+
+    private fun createForegroundInfo(message: String): ForegroundInfo {
+        createChannelIfNeeded()
+        val notification = buildNotification(message, 0, 0)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun buildNotification(text: String, done: Int, total: Int) =
+        NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setContentTitle("EverySync")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_sync)
+            .setOngoing(true)
+            .apply { if (total > 0) setProgress(total, done, false) }
+            .build()
+
+    private fun createChannelIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, "Sincronizzazione", NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+        }
+    }
+}
