@@ -4,7 +4,6 @@ import com.thegrizzlylabs.sardineandroid.impl.OkHttpSardine
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.URLEncoder
 
 class WebDavRemoteClient(
     private val baseUrl: String,   // es. "http://192.168.1.10:5005/webdav"
@@ -25,12 +24,7 @@ class WebDavRemoteClient(
 
     override fun disconnect() { /* nessuna sessione persistente da chiudere */ }
 
-    private fun encodeSegments(path: String): String =
-        path.split("/").joinToString("/") { segment ->
-            if (segment.isEmpty()) segment else URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
-        }
-
-    private fun urlFor(remotePath: String) = baseUrl.trimEnd('/') + "/" + encodeSegments(remotePath.trim('/'))
+    private fun urlFor(remotePath: String) = baseUrl.trimEnd('/') + "/" + remotePath.trim('/')
 
     override fun listFiles(remotePath: String): List<RemoteEntry> {
         val resources = sardine.list(urlFor(remotePath))

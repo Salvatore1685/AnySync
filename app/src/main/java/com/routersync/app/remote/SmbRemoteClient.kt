@@ -7,7 +7,6 @@ import jcifs.smb.NtlmPasswordAuthenticator
 import jcifs.smb.SmbFile
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.URLEncoder
 import java.util.Properties
 
 /**
@@ -44,27 +43,15 @@ class SmbRemoteClient(
         // e la sessione viene chiusa automaticamente dal pool interno.
     }
 
-    /**
-     * Codifica ogni singolo segmento del percorso (per gestire correttamente spazi e
-     * caratteri speciali nei nomi di cartelle/file, es. "Salvatore Backup"), preservando
-     * gli slash come separatori. Senza questa codifica, jcifs può interpretare male
-     * l'URL smb:// quando un nome contiene uno spazio non incapsulato, con il rischio di
-     * unire per errore il nome di una cartella a quello del file al suo interno.
-     */
-    private fun encodeSegments(path: String): String =
-        path.split("/").joinToString("/") { segment ->
-            if (segment.isEmpty()) segment else URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
-        }
-
     /** URL di una cartella: termina sempre con "/", come richiesto da jcifs per le directory. */
     private fun dirUrl(remotePath: String): String {
-        val clean = encodeSegments(remotePath.trim('/'))
+        val clean = remotePath.trim('/')
         return if (clean.isEmpty()) "smb://$host/$share/" else "smb://$host/$share/$clean/"
     }
 
     /** URL di un file: nessuno slash finale. */
     private fun fileUrl(remotePath: String): String =
-        "smb://$host/$share/${encodeSegments(remotePath.trim('/'))}"
+        "smb://$host/$share/${remotePath.trim('/')}"
 
     override fun listFiles(remotePath: String): List<RemoteEntry> {
         val dir = SmbFile(dirUrl(remotePath), context)
