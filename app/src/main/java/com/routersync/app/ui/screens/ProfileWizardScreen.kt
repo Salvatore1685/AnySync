@@ -469,20 +469,72 @@ private fun StepSchedule(
             networkPreference == NetworkPreference.HOME_WIFI_OR_MOBILE
         ) {
             Spacer(Modifier.height(8.dp))
-            val detectedSsid = remember { com.routersync.app.work.NetworkConditionChecker.currentWifiSsid(context) }
-            if (homeWifiSsid != null) {
-                Text("Wi-Fi di casa: $homeWifiSsid", style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
-                TextButton(onClick = { onHomeWifiSsidChange(null) }) { Text("Cambia") }
-            } else if (detectedSsid != null) {
-                OutlinedButton(onClick = { onHomeWifiSsidChange(detectedSsid) }) {
-                    Text("Usa \"$detectedSsid\" come Wi-Fi di casa")
-                }
-            } else {
-                Text(
-                    "Per rilevare il Wi-Fi di casa, apri questo wizard mentre sei connesso alla rete Wi-Fi di casa.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
+
+            var permissionGranted by remember {
+                mutableStateOf(
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        context, android.Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
                 )
+            }
+            val locationPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted -> permissionGranted = granted }
+
+            // Chiede il permesso automaticamente appena questa opzione viene selezionata,
+            // se non è già stato concesso (es. all'apertura dell'app) — nessun pulsante da notare.
+            LaunchedEffect(permissionGranted) {
+                if (!permissionGranted) {
+                    locationPermissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                }
+            }
+
+            // Il permesso dell'app da solo non basta su molti Android: serve anche che i
+            // Servizi di localizzazione di sistema siano attivi per leggere il nome del Wi-Fi.
+            val locationManager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager
+            val systemLocationEnabled = locationManager?.let {
+                androidx.core.location.LocationManagerCompat.isLocationEnabled(it)
+            } ?: true
+
+            when {
+                !permissionGranted -> {
+                    Text(
+                        "In attesa della concessione del permesso di localizzazione, necessario per leggere il nome della rete Wi-Fi connessa (l'app non lo usa per nient'altro).",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                !systemLocationEnabled -> {
+                    Text(
+                        "Il permesso è concesso, ma servono anche i Servizi di localizzazione attivi nelle impostazioni di sistema del telefono per poter leggere il nome del Wi-Fi.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(onClick = {
+                        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    }) {
+                        Text("Apri impostazioni di localizzazione")
+                    }
+                }
+                else -> {
+                    val detectedSsid = remember(permissionGranted, systemLocationEnabled) {
+                        com.routersync.app.work.NetworkConditionChecker.currentWifiSsid(context)
+                    }
+                    if (homeWifiSsid != null) {
+                        Text("Wi-Fi di casa: $homeWifiSsid", style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                        TextButton(onClick = { onHomeWifiSsidChange(null) }) { Text("Cambia") }
+                    } else if (detectedSsid != null) {
+                        OutlinedButton(onClick = { onHomeWifiSsidChange(detectedSsid) }) {
+                            Text("Usa \"$detectedSsid\" come Wi-Fi di casa")
+                        }
+                    } else {
+                        Text(
+                            "Per rilevare il Wi-Fi di casa, apri questo wizard mentre sei connesso alla rete Wi-Fi di casa.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
         }
 

@@ -56,4 +56,31 @@ object NetworkConditionChecker {
             }
         }
     }
+
+    /**
+     * Descrive in modo leggibile perché la condizione di rete non è soddisfatta in questo
+     * momento, per mostrare all'utente un messaggio utile invece di un generico "in attesa".
+     */
+    fun reasonNotSatisfied(context: Context, profile: SyncProfile): String {
+        val current = currentWifiSsid(context)
+        return when (profile.networkPreference) {
+            NetworkPreference.ANY -> "" // non dovrebbe mai capitare: ANY è sempre soddisfatta
+            NetworkPreference.WIFI_ONLY -> "in attesa di una connessione Wi-Fi (al momento non rilevata)"
+            NetworkPreference.HOME_WIFI_ONLY -> when {
+                profile.homeWifiSsid == null ->
+                    "nessun Wi-Fi di casa impostato per questa sync — modificala e rileva il Wi-Fi di casa mentre sei connesso ad esso"
+                current == null ->
+                    "in attesa del Wi-Fi di casa \"${profile.homeWifiSsid}\" (al momento non sei connesso a nessun Wi-Fi)"
+                else ->
+                    "in attesa del Wi-Fi di casa \"${profile.homeWifiSsid}\" (sei connesso a \"$current\")"
+            }
+            NetworkPreference.MOBILE_ONLY -> "in attesa dei dati mobili (richiede anche un IP pubblico funzionante sulla linea di casa)"
+            NetworkPreference.HOME_WIFI_OR_MOBILE -> when {
+                profile.homeWifiSsid == null ->
+                    "nessun Wi-Fi di casa impostato, e non sei sui dati mobili — modifica la sync per impostarlo"
+                else ->
+                    "in attesa del Wi-Fi di casa \"${profile.homeWifiSsid}\" o dei dati mobili (sei connesso a \"${current ?: "nessuna rete Wi-Fi"}\")"
+            }
+        }
+    }
 }

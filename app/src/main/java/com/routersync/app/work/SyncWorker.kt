@@ -35,8 +35,16 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         val profile = dao.getById(profileId) ?: return@withContext Result.failure()
 
         // Condizioni di rete che WorkManager non può verificare da solo (es. Wi-Fi di casa
-        // specifico): se non soddisfatte, riprova più tardi senza considerarlo un errore vero.
+        // specifico): se non soddisfatte, riprova più tardi senza considerarlo un errore vero —
+        // ma lo segnaliamo comunque, così l'utente vede perché è in attesa invece di uno
+        // spinner muto.
         if (!NetworkConditionChecker.isSatisfied(applicationContext, profile)) {
+            val reason = NetworkConditionChecker.reasonNotSatisfied(applicationContext, profile)
+            dao.updateSyncResult(
+                id = profile.id,
+                timestamp = System.currentTimeMillis(),
+                status = "In attesa: $reason"
+            )
             return@withContext Result.retry()
         }
 

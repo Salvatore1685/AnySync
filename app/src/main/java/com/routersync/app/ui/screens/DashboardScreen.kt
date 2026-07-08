@@ -352,6 +352,7 @@ private fun ProfileCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val dotColor = when {
                     profile.lastSyncStatus?.startsWith("OK") == true -> success
+                    profile.lastSyncStatus?.startsWith("In attesa") == true -> MaterialTheme.colorScheme.tertiary
                     profile.lastSyncStatus != null -> errorColor
                     else -> MaterialTheme.colorScheme.outline
                 }
@@ -360,11 +361,16 @@ private fun ProfileCard(
                 Text("Ultima sync: $lastSync", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             profile.lastSyncStatus?.let {
+                val statusColor = when {
+                    it.startsWith("OK") -> success
+                    it.startsWith("In attesa") -> MaterialTheme.colorScheme.tertiary
+                    else -> errorColor
+                }
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
-                    color = if (it.startsWith("OK")) success else errorColor,
+                    color = statusColor,
                     modifier = Modifier.padding(start = 14.dp)
                 )
             }
