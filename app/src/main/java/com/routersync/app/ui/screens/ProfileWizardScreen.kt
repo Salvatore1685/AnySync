@@ -22,6 +22,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.routersync.app.data.RemoteProtocol
+import com.routersync.app.data.NetworkPreference
 import com.routersync.app.data.ScheduleType
 import com.routersync.app.data.SyncDirection
 import com.routersync.app.data.SyncProfile
@@ -68,7 +69,7 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
     var scheduledMinute by remember { mutableStateOf(0) }
     var scheduledDayOfWeek by remember { mutableStateOf(java.util.Calendar.MONDAY) }
     var scheduledDayOfMonth by remember { mutableStateOf(1) }
-    var networkPreference by remember { mutableStateOf(com.routersync.app.data.NetworkPreference.ANY) }
+    var networkPreference by remember { mutableStateOf(NetworkPreference.ANY) }
     var requiresCharging by remember { mutableStateOf(false) }
     var homeWifiSsid by remember { mutableStateOf<String?>(null) }
 
@@ -360,8 +361,8 @@ private fun StepSchedule(
     scheduledHour: Int, scheduledMinute: Int, onTimeChange: (Int, Int) -> Unit,
     scheduledDayOfWeek: Int, onDayOfWeekChange: (Int) -> Unit,
     scheduledDayOfMonth: Int, onDayOfMonthChange: (Int) -> Unit,
-    networkPreference: com.routersync.app.data.NetworkPreference,
-    onNetworkPreferenceChange: (com.routersync.app.data.NetworkPreference) -> Unit,
+    networkPreference: NetworkPreference,
+    onNetworkPreferenceChange: (NetworkPreference) -> Unit,
     requiresCharging: Boolean, onRequiresChargingChange: (Boolean) -> Unit,
     homeWifiSsid: String?, onHomeWifiSsidChange: (String?) -> Unit
 ) {
@@ -458,8 +459,8 @@ private fun StepSchedule(
         }
 
         // Per le opzioni che coinvolgono il Wi-Fi di casa, permette di rilevarlo ora
-        if (networkPreference == com.routersync.app.data.NetworkPreference.HOME_WIFI_ONLY ||
-            networkPreference == com.routersync.app.data.NetworkPreference.HOME_WIFI_OR_MOBILE
+        if (networkPreference == NetworkPreference.HOME_WIFI_ONLY ||
+            networkPreference == NetworkPreference.HOME_WIFI_OR_MOBILE
         ) {
             Spacer(Modifier.height(8.dp))
             val detectedSsid = remember { com.routersync.app.work.NetworkConditionChecker.currentWifiSsid(context) }
@@ -479,8 +480,8 @@ private fun StepSchedule(
             }
         }
 
-        if (networkPreference == com.routersync.app.data.NetworkPreference.MOBILE_ONLY ||
-            networkPreference == com.routersync.app.data.NetworkPreference.HOME_WIFI_OR_MOBILE
+        if (networkPreference == NetworkPreference.MOBILE_ONLY ||
+            networkPreference == NetworkPreference.HOME_WIFI_OR_MOBILE
         ) {
             Spacer(Modifier.height(8.dp))
             Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
@@ -563,14 +564,13 @@ private fun weekDaysIt(): List<Pair<Int, String>> = listOf(
     java.util.Calendar.SUNDAY to "Dom"
 )
 
-private fun networkPreferenceOptionsIt(): List<Triple<com.routersync.app.data.NetworkPreference, String, String>> {
-    val p = com.routersync.app.data.NetworkPreference
+private fun networkPreferenceOptionsIt(): List<Triple<NetworkPreference, String, String>> {
     return listOf(
-        Triple(p.ANY, "Qualsiasi rete", "Wi-Fi o dati mobili, quello disponibile al momento"),
-        Triple(p.WIFI_ONLY, "Solo Wi-Fi", "Qualsiasi rete Wi-Fi, non necessariamente quella di casa"),
-        Triple(p.HOME_WIFI_ONLY, "Solo Wi-Fi di casa", "Aspetta finché non sei connesso alla tua rete di casa"),
-        Triple(p.MOBILE_ONLY, "Solo dati mobili", "Richiede un IP pubblico sulla linea di casa"),
-        Triple(p.HOME_WIFI_OR_MOBILE, "Wi-Fi di casa o dati mobili", "La prima disponibile tra le due")
+        Triple(NetworkPreference.ANY, "Qualsiasi rete", "Wi-Fi o dati mobili, quello disponibile al momento"),
+        Triple(NetworkPreference.WIFI_ONLY, "Solo Wi-Fi", "Qualsiasi rete Wi-Fi, non necessariamente quella di casa"),
+        Triple(NetworkPreference.HOME_WIFI_ONLY, "Solo Wi-Fi di casa", "Aspetta finché non sei connesso alla tua rete di casa"),
+        Triple(NetworkPreference.MOBILE_ONLY, "Solo dati mobili", "Richiede un IP pubblico sulla linea di casa"),
+        Triple(NetworkPreference.HOME_WIFI_OR_MOBILE, "Wi-Fi di casa o dati mobili", "La prima disponibile tra le due")
     )
 }
 
