@@ -247,18 +247,18 @@ private fun StatsSummaryCard(profiles: List<SyncProfile>) {
 
     ElevatedCard(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 18.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            StatItem(value = profiles.size.toString(), label = "Sync totali")
+            StatItem(value = profiles.size.toString(), label = "Sync totali", modifier = Modifier.weight(1f))
             StatDivider()
-            StatItem(value = activeCount.toString(), label = "Pianificate")
+            StatItem(value = activeCount.toString(), label = "Pianificate", modifier = Modifier.weight(1f))
             StatDivider()
-            StatItem(value = totalTransferred.toString(), label = "File (ultimo giro)")
+            StatItem(value = totalTransferred.toString(), label = "File (ultimo giro)", modifier = Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun StatItem(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+private fun StatItem(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
         Text(value, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(2.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
