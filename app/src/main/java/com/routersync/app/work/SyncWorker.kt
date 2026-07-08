@@ -31,10 +31,16 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         val profileId = inputData.getLong(KEY_PROFILE_ID, -1L)
         if (profileId == -1L) return@withContext Result.failure()
 
-        setForeground(createForegroundInfo("Avvio sincronizzazione…"))
-
         val dao = AppDatabase.getInstance(applicationContext).syncProfileDao()
         val profile = dao.getById(profileId) ?: return@withContext Result.failure()
+
+        // Condizioni di rete che WorkManager non può verificare da solo (es. Wi-Fi di casa
+        // specifico): se non soddisfatte, riprova più tardi senza considerarlo un errore vero.
+        if (!NetworkConditionChecker.isSatisfied(applicationContext, profile)) {
+            return@withContext Result.retry()
+        }
+
+        setForeground(createForegroundInfo("Avvio sincronizzazione…"))
 
         val engine = SyncEngine(applicationContext)
         val result = engine.run(
@@ -62,10 +68,13 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             dao.updateManifest(profile.id, manifest)
         }
 
-        // Se lo schedule è mensile, WorkManager non supporta un intervallo nativo:
-        // ri-pianifichiamo qui il prossimo OneTimeWorkRequest.
-        if (profile.scheduleType == ScheduleType.MONTHLY) {
-            SyncScheduler(applicationContext).scheduleMonthly(profile)
+        // Per Giornaliera/Settimanale/Mensile, ri-pianifichiamo qui il prossimo avvio preciso
+        // (WorkManager non supporta nativamente intervalli allineati a un giorno/ora specifici).
+        if (profile.scheduleType == ScheduleType.DAILY ||
+            profile.scheduleType == ScheduleType.WEEKLY ||
+            profile.scheduleType == ScheduleType.MONTHLY
+        ) {
+            SyncScheduler(applicationContext).schedulePrecise(profile)
         }
 
         when {

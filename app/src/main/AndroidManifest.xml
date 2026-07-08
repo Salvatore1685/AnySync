@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" /> <!-- per mDNS/NSD -->
+    <!-- Richiesto da Android per poter leggere il nome (SSID) della rete Wi-Fi connessa,
+         necessario per riconoscere "il Wi-Fi di casa": l'app non usa la posizione per altro. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Sincronizzazione in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

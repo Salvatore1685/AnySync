@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -63,6 +64,13 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
     var direction by remember { mutableStateOf(SyncDirection.UPLOAD_ONLY) }
     var autoFreeSpace by remember { mutableStateOf(false) }
     var mirrorDeletes by remember { mutableStateOf(false) }
+    var scheduledHour by remember { mutableStateOf(2) }
+    var scheduledMinute by remember { mutableStateOf(0) }
+    var scheduledDayOfWeek by remember { mutableStateOf(java.util.Calendar.MONDAY) }
+    var scheduledDayOfMonth by remember { mutableStateOf(1) }
+    var networkPreference by remember { mutableStateOf(com.routersync.app.data.NetworkPreference.ANY) }
+    var requiresCharging by remember { mutableStateOf(false) }
+    var homeWifiSsid by remember { mutableStateOf<String?>(null) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -112,7 +120,14 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
                         scheduleType = scheduleType, onScheduleChange = { scheduleType = it },
                         direction = direction, onDirectionChange = { direction = it },
                         autoFreeSpace = autoFreeSpace, onAutoFreeSpaceChange = { autoFreeSpace = it },
-                        mirrorDeletes = mirrorDeletes, onMirrorDeletesChange = { mirrorDeletes = it }
+                        mirrorDeletes = mirrorDeletes, onMirrorDeletesChange = { mirrorDeletes = it },
+                        scheduledHour = scheduledHour, scheduledMinute = scheduledMinute,
+                        onTimeChange = { h, m -> scheduledHour = h; scheduledMinute = m },
+                        scheduledDayOfWeek = scheduledDayOfWeek, onDayOfWeekChange = { scheduledDayOfWeek = it },
+                        scheduledDayOfMonth = scheduledDayOfMonth, onDayOfMonthChange = { scheduledDayOfMonth = it },
+                        networkPreference = networkPreference, onNetworkPreferenceChange = { networkPreference = it },
+                        requiresCharging = requiresCharging, onRequiresChargingChange = { requiresCharging = it },
+                        homeWifiSsid = homeWifiSsid, onHomeWifiSsidChange = { homeWifiSsid = it }
                     )
                 }
             }
@@ -147,7 +162,11 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
                                     localFolderDisplayName = localDisplayName,
                                     scheduleType = scheduleType, direction = direction,
                                     autoFreeSpaceAfterSync = autoFreeSpace,
-                                    mirrorDeletes = mirrorDeletes && direction == SyncDirection.BIDIRECTIONAL
+                                    mirrorDeletes = mirrorDeletes && direction == SyncDirection.BIDIRECTIONAL,
+                                    scheduledHour = scheduledHour, scheduledMinute = scheduledMinute,
+                                    scheduledDayOfWeek = scheduledDayOfWeek, scheduledDayOfMonth = scheduledDayOfMonth,
+                                    networkPreference = networkPreference, requiresCharging = requiresCharging,
+                                    homeWifiSsid = homeWifiSsid
                                 )
                             )
                             onDone()
@@ -337,8 +356,17 @@ private fun StepSchedule(
     scheduleType: ScheduleType, onScheduleChange: (ScheduleType) -> Unit,
     direction: SyncDirection, onDirectionChange: (SyncDirection) -> Unit,
     autoFreeSpace: Boolean, onAutoFreeSpaceChange: (Boolean) -> Unit,
-    mirrorDeletes: Boolean, onMirrorDeletesChange: (Boolean) -> Unit
+    mirrorDeletes: Boolean, onMirrorDeletesChange: (Boolean) -> Unit,
+    scheduledHour: Int, scheduledMinute: Int, onTimeChange: (Int, Int) -> Unit,
+    scheduledDayOfWeek: Int, onDayOfWeekChange: (Int) -> Unit,
+    scheduledDayOfMonth: Int, onDayOfMonthChange: (Int) -> Unit,
+    networkPreference: com.routersync.app.data.NetworkPreference,
+    onNetworkPreferenceChange: (com.routersync.app.data.NetworkPreference) -> Unit,
+    requiresCharging: Boolean, onRequiresChargingChange: (Boolean) -> Unit,
+    homeWifiSsid: String?, onHomeWifiSsidChange: (String?) -> Unit
 ) {
+    val context = LocalContext.current
+
     Text("4. Piano di sincronizzazione", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
     Text("Frequenza", style = MaterialTheme.typography.labelLarge)
@@ -350,7 +378,56 @@ private fun StepSchedule(
             }
         }
     }
+
+    // Orario preciso: rilevante per tutte le frequenze a tempo tranne Manuale
+    if (scheduleType != ScheduleType.MANUAL && scheduleType != ScheduleType.HOURLY) {
+        Spacer(Modifier.height(12.dp))
+        Text("Orario", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(4.dp))
+        OutlinedButton(onClick = {
+            android.app.TimePickerDialog(
+                context,
+                { _, h, m -> onTimeChange(h, m) },
+                scheduledHour, scheduledMinute, true
+            ).show()
+        }) {
+            Text("%02d:%02d".format(scheduledHour, scheduledMinute))
+        }
+    }
+
+    // Giorno della settimana: solo per Settimanale
+    if (scheduleType == ScheduleType.WEEKLY) {
+        Spacer(Modifier.height(12.dp))
+        Text("Giorno della settimana", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(4.dp))
+        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            weekDaysIt().forEach { (calendarDay, label) ->
+                FilterChip(
+                    selected = scheduledDayOfWeek == calendarDay,
+                    onClick = { onDayOfWeekChange(calendarDay) },
+                    label = { Text(label) }
+                )
+            }
+        }
+    }
+
+    // Giorno del mese: solo per Mensile
+    if (scheduleType == ScheduleType.MONTHLY) {
+        Spacer(Modifier.height(12.dp))
+        Text("Giorno del mese", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(4.dp))
+        OutlinedTextField(
+            value = scheduledDayOfMonth.toString(),
+            onValueChange = { it.toIntOrNull()?.let { d -> if (d in 1..31) onDayOfMonthChange(d) } },
+            label = { Text("Giorno (1-31)") },
+            supportingText = { Text("Nei mesi più corti verrà usato l'ultimo giorno disponibile") },
+            modifier = Modifier.width(160.dp)
+        )
+    }
+
     Spacer(Modifier.height(16.dp))
+    Divider()
+    Spacer(Modifier.height(12.dp))
     Text("Direzione", style = MaterialTheme.typography.labelLarge)
     Column {
         SyncDirection.entries.forEach { d ->
@@ -358,6 +435,68 @@ private fun StepSchedule(
                 RadioButton(selected = direction == d, onClick = { onDirectionChange(d) })
                 Text(directionLabelIt(d))
             }
+        }
+    }
+
+    // Condizioni di avvio: rilevanti solo per le pianificazioni automatiche
+    if (scheduleType != ScheduleType.MANUAL) {
+        Spacer(Modifier.height(16.dp))
+        Divider()
+        Spacer(Modifier.height(12.dp))
+        Text("Condizioni di avvio", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(4.dp))
+        Column {
+            networkPreferenceOptionsIt().forEach { (pref, label, desc) ->
+                Row(verticalAlignment = androidx.compose.ui.Alignment.Top) {
+                    RadioButton(selected = networkPreference == pref, onClick = { onNetworkPreferenceChange(pref) })
+                    Column(Modifier.padding(top = 12.dp)) {
+                        Text(label)
+                        Text(desc, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        // Per le opzioni che coinvolgono il Wi-Fi di casa, permette di rilevarlo ora
+        if (networkPreference == com.routersync.app.data.NetworkPreference.HOME_WIFI_ONLY ||
+            networkPreference == com.routersync.app.data.NetworkPreference.HOME_WIFI_OR_MOBILE
+        ) {
+            Spacer(Modifier.height(8.dp))
+            val detectedSsid = remember { com.routersync.app.work.NetworkConditionChecker.currentWifiSsid(context) }
+            if (homeWifiSsid != null) {
+                Text("Wi-Fi di casa: $homeWifiSsid", style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                TextButton(onClick = { onHomeWifiSsidChange(null) }) { Text("Cambia") }
+            } else if (detectedSsid != null) {
+                OutlinedButton(onClick = { onHomeWifiSsidChange(detectedSsid) }) {
+                    Text("Usa \"$detectedSsid\" come Wi-Fi di casa")
+                }
+            } else {
+                Text(
+                    "Per rilevare il Wi-Fi di casa, apri questo wizard mentre sei connesso alla rete Wi-Fi di casa.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
+        if (networkPreference == com.routersync.app.data.NetworkPreference.MOBILE_ONLY ||
+            networkPreference == com.routersync.app.data.NetworkPreference.HOME_WIFI_OR_MOBILE
+        ) {
+            Spacer(Modifier.height(8.dp))
+            Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
+                Text(
+                    "Questa opzione richiede un indirizzo IP pubblico sulla tua linea internet di casa. Se il tuo router è dietro CGNAT (comune con alcuni operatori), la sincronizzazione tramite dati mobili non riuscirà a connettersi finché non risolvi questo aspetto con il tuo operatore.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(10.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Solo se in carica", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            Switch(checked = requiresCharging, onCheckedChange = onRequiresChargingChange)
         }
     }
 
@@ -411,6 +550,28 @@ private fun StepSchedule(
             }
         }
     }
+}
+
+/** Elenco dei giorni della settimana con le costanti di java.util.Calendar corrispondenti. */
+private fun weekDaysIt(): List<Pair<Int, String>> = listOf(
+    java.util.Calendar.MONDAY to "Lun",
+    java.util.Calendar.TUESDAY to "Mar",
+    java.util.Calendar.WEDNESDAY to "Mer",
+    java.util.Calendar.THURSDAY to "Gio",
+    java.util.Calendar.FRIDAY to "Ven",
+    java.util.Calendar.SATURDAY to "Sab",
+    java.util.Calendar.SUNDAY to "Dom"
+)
+
+private fun networkPreferenceOptionsIt(): List<Triple<com.routersync.app.data.NetworkPreference, String, String>> {
+    val p = com.routersync.app.data.NetworkPreference
+    return listOf(
+        Triple(p.ANY, "Qualsiasi rete", "Wi-Fi o dati mobili, quello disponibile al momento"),
+        Triple(p.WIFI_ONLY, "Solo Wi-Fi", "Qualsiasi rete Wi-Fi, non necessariamente quella di casa"),
+        Triple(p.HOME_WIFI_ONLY, "Solo Wi-Fi di casa", "Aspetta finché non sei connesso alla tua rete di casa"),
+        Triple(p.MOBILE_ONLY, "Solo dati mobili", "Richiede un IP pubblico sulla linea di casa"),
+        Triple(p.HOME_WIFI_OR_MOBILE, "Wi-Fi di casa o dati mobili", "La prima disponibile tra le due")
+    )
 }
 
 private fun scheduleLabelIt(s: ScheduleType) = when (s) {

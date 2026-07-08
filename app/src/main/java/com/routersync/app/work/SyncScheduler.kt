@@ -3,6 +3,7 @@ package com.routersync.app.work
 import android.content.Context
 import androidx.work.*
 import com.routersync.app.data.AppDatabase
+import com.routersync.app.data.NetworkPreference
 import com.routersync.app.data.ScheduleType
 import com.routersync.app.data.SyncProfile
 import kotlinx.coroutines.flow.first
@@ -11,34 +12,49 @@ import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 /**
- * Centralizza la creazione/cancellazione dei lavori WorkManager per ciascun profilo,
- * traducendo il piano scelto dall'utente (orario/giornaliero/settimanale/mensile/manuale)
- * nelle API di WorkManager più adatte.
+ * Centralizza la creazione/cancellazione dei lavori WorkManager per ciascun profilo.
+ *
+ * Per Giornaliera/Settimanale/Mensile viene sempre calcolato l'esatto prossimo orario
+ * richiesto (giorno + ora + minuto) e pianificato come lavoro singolo che si ri-pianifica
+ * da solo al termine di ogni esecuzione — più prevedibile del semplice "ripeti ogni N ore"
+ * di WorkManager, e permette di rispettare con precisione la scelta dell'utente.
+ *
+ * Le condizioni di avvio (rete/carica) vengono tradotte in vincoli nativi di WorkManager
+ * dove possibile; il controllo più fine (Wi-Fi di casa specifico) avviene invece dentro
+ * [SyncWorker] stesso al momento dell'esecuzione, con nuovo tentativo automatico se non
+ * ancora soddisfatto.
  */
 class SyncScheduler(private val context: Context) {
 
     private val workManager = WorkManager.getInstance(context)
     private fun uniqueWorkName(profileId: Long) = "sync_profile_$profileId"
 
-    private val networkConstraints = Constraints.Builder()
-        .setRequiredNetworkType(NetworkType.CONNECTED)
-        .build()
+    private fun buildConstraints(profile: SyncProfile): Constraints {
+        val networkType = when (profile.networkPreference) {
+            NetworkPreference.ANY -> NetworkType.CONNECTED
+            NetworkPreference.MOBILE_ONLY -> NetworkType.CONNECTED
+            NetworkPreference.WIFI_ONLY, NetworkPreference.HOME_WIFI_ONLY -> NetworkType.UNMETERED
+            NetworkPreference.HOME_WIFI_OR_MOBILE -> NetworkType.CONNECTED
+        }
+        return Constraints.Builder()
+            .setRequiredNetworkType(networkType)
+            .setRequiresCharging(profile.requiresCharging)
+            .build()
+    }
 
     /** Applica (o riapplica) la pianificazione per un profilo, sostituendo quella precedente. */
     fun schedule(profile: SyncProfile) {
         cancel(profile.id)
         when (profile.scheduleType) {
             ScheduleType.MANUAL -> { /* nessuna pianificazione: si avvia solo con runManualSync() */ }
-            ScheduleType.HOURLY -> scheduleRecurring(profile, 1, TimeUnit.HOURS)
-            ScheduleType.DAILY -> scheduleRecurring(profile, 1, TimeUnit.DAYS)
-            ScheduleType.WEEKLY -> scheduleRecurring(profile, 7, TimeUnit.DAYS)
-            ScheduleType.MONTHLY -> scheduleMonthly(profile)
+            ScheduleType.HOURLY -> scheduleHourly(profile)
+            ScheduleType.DAILY, ScheduleType.WEEKLY, ScheduleType.MONTHLY -> schedulePrecise(profile)
         }
     }
 
-    private fun scheduleRecurring(profile: SyncProfile, interval: Long, unit: TimeUnit) {
-        val request = PeriodicWorkRequestBuilder<SyncWorker>(interval, unit)
-            .setConstraints(networkConstraints)
+    private fun scheduleHourly(profile: SyncProfile) {
+        val request = PeriodicWorkRequestBuilder<SyncWorker>(1, TimeUnit.HOURS)
+            .setConstraints(buildConstraints(profile))
             .setInputData(workDataOf(SyncWorker.KEY_PROFILE_ID to profile.id))
             .build()
         workManager.enqueueUniquePeriodicWork(
@@ -49,21 +65,44 @@ class SyncScheduler(private val context: Context) {
         persistWorkId(profile.id, request.id.toString())
     }
 
-    /**
-     * WorkManager non ha un intervallo "mensile" nativo (i mesi hanno lunghezza variabile),
-     * quindi pianifichiamo un singolo OneTimeWorkRequest per la prossima esecuzione;
-     * il Worker stesso, a fine lavoro, richiama questo metodo per pianificare il mese successivo.
-     */
-    fun scheduleMonthly(profile: SyncProfile) {
+    /** Calcola la prossima data/ora esatta in cui la sync deve partire, in base al piano scelto. */
+    private fun computeNextOccurrence(profile: SyncProfile): Long {
         val now = Calendar.getInstance()
-        val next = (now.clone() as Calendar).apply {
-            add(Calendar.MONTH, 1)
+        val next = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, profile.scheduledHour)
+            set(Calendar.MINUTE, profile.scheduledMinute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
         }
-        val delayMs = next.timeInMillis - now.timeInMillis
+        when (profile.scheduleType) {
+            ScheduleType.DAILY -> {
+                if (!next.after(now)) next.add(Calendar.DAY_OF_MONTH, 1)
+            }
+            ScheduleType.WEEKLY -> {
+                next.set(Calendar.DAY_OF_WEEK, profile.scheduledDayOfWeek)
+                if (!next.after(now)) next.add(Calendar.WEEK_OF_YEAR, 1)
+            }
+            ScheduleType.MONTHLY -> {
+                val maxDay = next.getActualMaximum(Calendar.DAY_OF_MONTH)
+                next.set(Calendar.DAY_OF_MONTH, minOf(profile.scheduledDayOfMonth, maxDay))
+                if (!next.after(now)) {
+                    next.add(Calendar.MONTH, 1)
+                    val newMax = next.getActualMaximum(Calendar.DAY_OF_MONTH)
+                    next.set(Calendar.DAY_OF_MONTH, minOf(profile.scheduledDayOfMonth, newMax))
+                }
+            }
+            else -> {}
+        }
+        return next.timeInMillis
+    }
 
+    /** Pianifica (o ri-pianifica) il prossimo avvio preciso per Giornaliera/Settimanale/Mensile. */
+    fun schedulePrecise(profile: SyncProfile) {
+        val delayMs = (computeNextOccurrence(profile) - System.currentTimeMillis()).coerceAtLeast(0)
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setConstraints(networkConstraints)
+            .setConstraints(buildConstraints(profile))
             .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
+            .setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.MINUTES)
             .setInputData(workDataOf(SyncWorker.KEY_PROFILE_ID to profile.id))
             .build()
         workManager.enqueueUniqueWork(
@@ -77,7 +116,7 @@ class SyncScheduler(private val context: Context) {
     /** Avvia una sincronizzazione immediata (tasto manuale), indipendentemente dallo schedule. */
     fun runManualSync(profile: SyncProfile) {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setConstraints(networkConstraints)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setInputData(workDataOf(SyncWorker.KEY_PROFILE_ID to profile.id))
             .build()
         workManager.enqueueUniqueWork(
@@ -105,7 +144,6 @@ class SyncScheduler(private val context: Context) {
     fun rescheduleAll() {
         val dao = AppDatabase.getInstance(context).syncProfileDao()
         runBlocking {
-            // observeAll è un Flow: qui prendiamo solo il primo valore emesso
             val profiles = dao.observeAll().first()
             profiles.forEach { schedule(it) }
         }

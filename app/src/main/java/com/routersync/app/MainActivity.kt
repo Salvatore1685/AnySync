@@ -21,6 +21,10 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { /* se negato, le notifiche di avanzamento sync semplicemente non appariranno */ }
 
+    private val requestLocationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* se negato, il riconoscimento del Wi-Fi di casa specifico non sarà disponibile */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -30,6 +34,7 @@ class MainActivity : ComponentActivity() {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
+                    requestLocationPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                 }
 
                 val navController = rememberNavController()
