@@ -396,6 +396,20 @@ private fun StepSchedule(
         }
     }
 
+    // Sync oraria: si può scegliere solo il minuto in cui scatta ogni ora (es. "sempre al minuto 15")
+    if (scheduleType == ScheduleType.HOURLY) {
+        Spacer(Modifier.height(12.dp))
+        Text("Minuto di ogni ora", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(4.dp))
+        OutlinedTextField(
+            value = scheduledMinute.toString(),
+            onValueChange = { it.toIntOrNull()?.let { m -> if (m in 0..59) onTimeChange(scheduledHour, m) } },
+            label = { Text("Minuto (0-59)") },
+            supportingText = { Text("Es. 15 = parte sempre a XX:15, ogni ora") },
+            modifier = Modifier.width(160.dp)
+        )
+    }
+
     // Giorno della settimana: solo per Settimanale
     if (scheduleType == ScheduleType.WEEKLY) {
         Spacer(Modifier.height(12.dp))
@@ -439,8 +453,8 @@ private fun StepSchedule(
         }
     }
 
-    // Condizioni di avvio: rilevanti solo per le pianificazioni automatiche
-    if (scheduleType != ScheduleType.MANUAL) {
+    // Condizioni di avvio: valgono anche per la sync manuale (che rispetterà queste condizioni quando premuta)
+    run {
         Spacer(Modifier.height(16.dp))
         Divider()
         Spacer(Modifier.height(12.dp))

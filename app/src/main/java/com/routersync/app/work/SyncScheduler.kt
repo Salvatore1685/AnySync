@@ -53,8 +53,19 @@ class SyncScheduler(private val context: Context) {
     }
 
     private fun scheduleHourly(profile: SyncProfile) {
+        // Allinea la prima esecuzione al minuto scelto (es. sempre a XX:15), poi ripete ogni ora da lì
+        val now = Calendar.getInstance()
+        val firstRun = Calendar.getInstance().apply {
+            set(Calendar.MINUTE, profile.scheduledMinute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (!after(now)) add(Calendar.HOUR_OF_DAY, 1)
+        }
+        val delayMs = (firstRun.timeInMillis - now.timeInMillis).coerceAtLeast(0)
+
         val request = PeriodicWorkRequestBuilder<SyncWorker>(1, TimeUnit.HOURS)
             .setConstraints(buildConstraints(profile))
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .setInputData(workDataOf(SyncWorker.KEY_PROFILE_ID to profile.id))
             .build()
         workManager.enqueueUniquePeriodicWork(
@@ -113,10 +124,10 @@ class SyncScheduler(private val context: Context) {
         persistWorkId(profile.id, request.id.toString())
     }
 
-    /** Avvia una sincronizzazione immediata (tasto manuale), indipendentemente dallo schedule. */
+    /** Avvia una sincronizzazione immediata (tasto manuale), rispettando le condizioni di rete/carica scelte per il profilo. */
     fun runManualSync(profile: SyncProfile) {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setConstraints(buildConstraints(profile))
             .setInputData(workDataOf(SyncWorker.KEY_PROFILE_ID to profile.id))
             .build()
         workManager.enqueueUniqueWork(
