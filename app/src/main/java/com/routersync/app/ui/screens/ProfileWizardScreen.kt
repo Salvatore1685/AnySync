@@ -381,9 +381,15 @@ private fun StepSchedule(
     }
 
     // Orario preciso: rilevante per tutte le frequenze a tempo tranne Manuale
-    if (scheduleType != ScheduleType.MANUAL && scheduleType != ScheduleType.HOURLY) {
+    if (scheduleType != ScheduleType.MANUAL) {
         Spacer(Modifier.height(12.dp))
         Text("Orario", style = MaterialTheme.typography.labelLarge)
+        if (scheduleType == ScheduleType.HOURLY) {
+            Text(
+                "Prima esecuzione a quest'ora, poi si ripete ogni ora allo stesso minuto",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
         Spacer(Modifier.height(4.dp))
         OutlinedButton(onClick = {
             android.app.TimePickerDialog(
@@ -394,20 +400,6 @@ private fun StepSchedule(
         }) {
             Text("%02d:%02d".format(scheduledHour, scheduledMinute))
         }
-    }
-
-    // Sync oraria: si può scegliere solo il minuto in cui scatta ogni ora (es. "sempre al minuto 15")
-    if (scheduleType == ScheduleType.HOURLY) {
-        Spacer(Modifier.height(12.dp))
-        Text("Minuto di ogni ora", style = MaterialTheme.typography.labelLarge)
-        Spacer(Modifier.height(4.dp))
-        OutlinedTextField(
-            value = scheduledMinute.toString(),
-            onValueChange = { it.toIntOrNull()?.let { m -> if (m in 0..59) onTimeChange(scheduledHour, m) } },
-            label = { Text("Minuto (0-59)") },
-            supportingText = { Text("Es. 15 = parte sempre a XX:15, ogni ora") },
-            modifier = Modifier.width(160.dp)
-        )
     }
 
     // Giorno della settimana: solo per Settimanale

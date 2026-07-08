@@ -53,13 +53,15 @@ class SyncScheduler(private val context: Context) {
     }
 
     private fun scheduleHourly(profile: SyncProfile) {
-        // Allinea la prima esecuzione al minuto scelto (es. sempre a XX:15), poi ripete ogni ora da lì
+        // La prima esecuzione parte esattamente all'ora:minuto scelti (oggi se ancora futuro,
+        // altrimenti domani); da quel momento in poi si ripete ogni ora, sempre allo stesso minuto.
         val now = Calendar.getInstance()
         val firstRun = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, profile.scheduledHour)
             set(Calendar.MINUTE, profile.scheduledMinute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            if (!after(now)) add(Calendar.HOUR_OF_DAY, 1)
+            if (!after(now)) add(Calendar.DAY_OF_MONTH, 1)
         }
         val delayMs = (firstRun.timeInMillis - now.timeInMillis).coerceAtLeast(0)
 
