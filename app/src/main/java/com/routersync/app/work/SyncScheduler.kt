@@ -30,14 +30,14 @@ class SyncScheduler(private val context: Context) {
     private fun uniqueWorkName(profileId: Long) = "sync_profile_$profileId"
 
     private fun buildConstraints(profile: SyncProfile): Constraints {
-        val networkType = when (profile.networkPreference) {
-            NetworkPreference.ANY -> NetworkType.CONNECTED
-            NetworkPreference.MOBILE_ONLY -> NetworkType.CONNECTED
-            NetworkPreference.WIFI_ONLY, NetworkPreference.HOME_WIFI_ONLY -> NetworkType.UNMETERED
-            NetworkPreference.HOME_WIFI_OR_MOBILE -> NetworkType.CONNECTED
-        }
+        // Usiamo sempre CONNECTED come vincolo nativo di WorkManager: il controllo più preciso
+        // (Wi-Fi specifico, Wi-Fi di casa, dati mobili) avviene dentro il Worker stesso tramite
+        // NetworkConditionChecker. Il vincolo nativo UNMETERED, usato in precedenza per "Wi-Fi",
+        // si è rivelato inaffidabile: alcune reti Wi-Fi (anche quella di casa) vengono segnalate
+        // da Android come "a consumo" per motivi tecnici indipendenti dall'essere Wi-Fi, facendo
+        // restare la sincronizzazione bloccata in attesa di una condizione mai soddisfatta.
         return Constraints.Builder()
-            .setRequiredNetworkType(networkType)
+            .setRequiredNetworkType(NetworkType.CONNECTED)
             .setRequiresCharging(profile.requiresCharging)
             .build()
     }
