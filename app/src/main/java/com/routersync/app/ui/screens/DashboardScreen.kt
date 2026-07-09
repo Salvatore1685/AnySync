@@ -121,7 +121,7 @@ fun DashboardScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("EverySync", fontWeight = FontWeight.Bold)
+                        Text("AnySync", fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(

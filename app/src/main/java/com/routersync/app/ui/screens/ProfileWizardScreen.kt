@@ -145,7 +145,8 @@ fun ProfileWizardScreen(
                         onSyncNameChange = { syncName = it },
                         onPick = { folderPicker.launch(null) },
                         onRefineSelection = { showFolderPicker = true },
-                        excludedCount = excludedPaths.size
+                        excludedCount = excludedPaths.size,
+                        autoFreeSpace = autoFreeSpace, onAutoFreeSpaceChange = { autoFreeSpace = it }
                     )
                     1 -> StepRemoteDevice(
                         selectedDevice = selectedDevice,
@@ -166,13 +167,12 @@ fun ProfileWizardScreen(
                         protocol = protocol, host = host, port = port, username = username, password = password,
                         shareName = remoteBaseShare, onShareChange = { remoteBaseShare = it },
                         folderName = remoteFolderName, onFolderChange = { remoteFolderName = it },
-                        syncName = syncName
+                        syncName = syncName,
+                        storageWarningGb = storageWarningGb, onStorageWarningGbChange = { storageWarningGb = it }
                     )
                     3 -> StepSchedule(
                         scheduleType = scheduleType, onScheduleChange = { scheduleType = it },
                         direction = direction, onDirectionChange = { direction = it },
-                        autoFreeSpace = autoFreeSpace, onAutoFreeSpaceChange = { autoFreeSpace = it },
-                        storageWarningGb = storageWarningGb, onStorageWarningGbChange = { storageWarningGb = it },
                         mirrorDeletes = mirrorDeletes, onMirrorDeletesChange = { mirrorDeletes = it },
                         scheduledHour = scheduledHour, scheduledMinute = scheduledMinute,
                         onTimeChange = { h, m -> scheduledHour = h; scheduledMinute = m },
@@ -250,7 +250,8 @@ private fun StepLocalFolder(
     onSyncNameChange: (String) -> Unit,
     onPick: () -> Unit,
     onRefineSelection: () -> Unit,
-    excludedCount: Int
+    excludedCount: Int,
+    autoFreeSpace: Boolean, onAutoFreeSpaceChange: (Boolean) -> Unit
 ) {
     Text("1. Nome e cartella da sincronizzare", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
@@ -275,6 +276,23 @@ private fun StepLocalFolder(
                 else "Scegli cosa sincronizzare ($excludedCount escluso/i)"
             )
         }
+    }
+
+    Spacer(Modifier.height(20.dp))
+    Divider()
+    Spacer(Modifier.height(16.dp))
+    Row(
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Libera spazio automaticamente", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Elimina ogni file dal telefono subito dopo averlo caricato sull'HDD (rilevante solo se la sync prevede un caricamento)",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        Switch(checked = autoFreeSpace, onCheckedChange = onAutoFreeSpaceChange)
     }
 }
 
@@ -348,7 +366,8 @@ private fun StepRemoteFolder(
     protocol: RemoteProtocol, host: String, port: Int, username: String, password: String,
     shareName: String, onShareChange: (String) -> Unit,
     folderName: String, onFolderChange: (String) -> Unit,
-    syncName: String
+    syncName: String,
+    storageWarningGb: Int, onStorageWarningGbChange: (Int) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf<String?>(null) }
@@ -403,6 +422,20 @@ private fun StepRemoteFolder(
 
     status?.let { Spacer(Modifier.height(8.dp)); Text(it) }
 
+    if (protocol == RemoteProtocol.SMB) {
+        Spacer(Modifier.height(20.dp))
+        Divider()
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = storageWarningGb.toString(),
+            onValueChange = { it.toIntOrNull()?.let { gb -> if (gb > 0) onStorageWarningGbChange(gb) } },
+            label = { Text("Avvisa se lo spazio libero sull'HDD scende sotto (GB)") },
+            supportingText = { Text("Specifico per questo HDD: capacità diverse richiedono soglie diverse") },
+            singleLine = true,
+            modifier = Modifier.width(260.dp)
+        )
+    }
+
     if (showBrowser) {
         Dialog(onDismissRequest = { showBrowser = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             val client = remember { RemoteBrowserClientFactory.create(protocol, host, port, username, password) }
@@ -432,8 +465,6 @@ private fun StepRemoteFolder(
 private fun StepSchedule(
     scheduleType: ScheduleType, onScheduleChange: (ScheduleType) -> Unit,
     direction: SyncDirection, onDirectionChange: (SyncDirection) -> Unit,
-    autoFreeSpace: Boolean, onAutoFreeSpaceChange: (Boolean) -> Unit,
-    storageWarningGb: Int, onStorageWarningGbChange: (Int) -> Unit,
     mirrorDeletes: Boolean, onMirrorDeletesChange: (Boolean) -> Unit,
     scheduledHour: Int, scheduledMinute: Int, onTimeChange: (Int, Int) -> Unit,
     scheduledDayOfWeek: Int, onDayOfWeekChange: (Int) -> Unit,
@@ -733,36 +764,6 @@ private fun StepSchedule(
             Text("Solo se in carica", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
             Switch(checked = requiresCharging, onCheckedChange = onRequiresChargingChange)
         }
-    }
-
-    // Liberazione spazio automatica: ha senso solo quando si carica qualcosa dal telefono verso l'HDD
-    if (direction == SyncDirection.UPLOAD_ONLY || direction == SyncDirection.BIDIRECTIONAL) {
-        Spacer(Modifier.height(16.dp))
-        Divider()
-        Spacer(Modifier.height(12.dp))
-        Row(
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Libera spazio automaticamente", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    "Elimina ogni file dal telefono subito dopo averlo caricato sull'HDD",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            Switch(checked = autoFreeSpace, onCheckedChange = onAutoFreeSpaceChange)
-        }
-
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = storageWarningGb.toString(),
-            onValueChange = { it.toIntOrNull()?.let { gb -> if (gb > 0) onStorageWarningGbChange(gb) } },
-            label = { Text("Avvisa se lo spazio libero sull'HDD scende sotto (GB)") },
-            supportingText = { Text("Specifico per questo HDD: capacità diverse richiedono soglie diverse") },
-            singleLine = true,
-            modifier = Modifier.width(260.dp)
-        )
     }
 
     // Propagazione cancellazioni: ha senso solo per la sincronizzazione bidirezionale

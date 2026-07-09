@@ -108,7 +108,7 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
 
     private fun buildNotification(text: String, done: Int, total: Int) =
         NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setContentTitle("EverySync")
+            .setContentTitle("AnySync")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_sync)
             .setOngoing(true)
