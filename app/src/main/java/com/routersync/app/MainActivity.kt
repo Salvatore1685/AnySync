@@ -17,13 +17,9 @@ import com.routersync.app.ui.theme.RouterSyncTheme
 
 class MainActivity : ComponentActivity() {
 
-    private val requestNotificationPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* se negato, le notifiche di avanzamento sync semplicemente non appariranno */ }
-
-    private val requestLocationPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* se negato, il riconoscimento del Wi-Fi di casa specifico non sarà disponibile */ }
+    private val requestPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { /* i permessi negati limitano solo le funzioni opzionali collegate (notifiche di avanzamento, riconoscimento Wi-Fi di casa) */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,10 +27,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             RouterSyncTheme {
                 LaunchedEffect(Unit) {
+                    val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        permissions += Manifest.permission.POST_NOTIFICATIONS
                     }
-                    requestLocationPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                    requestPermissions.launch(permissions.toTypedArray())
                 }
 
                 val navController = rememberNavController()
