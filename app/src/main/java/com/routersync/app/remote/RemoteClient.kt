@@ -41,4 +41,7 @@ interface RemoteClient {
 
     /** Elimina un file remoto (usato solo se in futuro si vorrà una sync "a specchio"). */
     fun delete(remotePath: String)
+
+    /** Spazio libero (in byte) sulla condivisione remota, se il protocollo lo supporta. Null altrimenti. */
+    fun freeSpaceBytes(): Long? = null
 }

@@ -13,6 +13,7 @@ import androidx.navigation.compose.rememberNavController
 import com.routersync.app.ui.screens.DashboardScreen
 import com.routersync.app.ui.screens.HddGalleryScreen
 import com.routersync.app.ui.screens.ProfileWizardScreen
+import com.routersync.app.ui.screens.SettingsScreen
 import com.routersync.app.ui.theme.RouterSyncTheme
 
 class MainActivity : ComponentActivity() {
@@ -41,8 +42,12 @@ class MainActivity : ComponentActivity() {
                             onAddProfile = { navController.navigate("wizard") },
                             onEditProfile = { profileId -> navController.navigate("wizard_edit/$profileId") },
                             onBrowseProfile = { profileId -> navController.navigate("browse/$profileId") },
-                            onAdminBrowse = { profileId -> navController.navigate("browse_full/$profileId") }
+                            onAdminBrowse = { profileId -> navController.navigate("browse_full/$profileId") },
+                            onOpenSettings = { navController.navigate("settings") }
                         )
+                    }
+                    composable("settings") {
+                        SettingsScreen(onClose = { navController.popBackStack() })
                     }
                     composable("wizard") {
                         ProfileWizardScreen(

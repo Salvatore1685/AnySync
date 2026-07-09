@@ -91,4 +91,11 @@ class SmbRemoteClient(
         val file = SmbFile(fileUrl(remotePath), context)
         if (file.exists()) file.delete()
     }
+
+    /** Spazio libero sulla condivisione, in byte. Null se il server/il driver non lo supporta. */
+    override fun freeSpaceBytes(): Long? = try {
+        SmbFile(dirUrl(""), context).diskFreeSpace
+    } catch (e: Exception) {
+        null
+    }
 }

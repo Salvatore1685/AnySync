@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
@@ -51,6 +52,8 @@ import com.routersync.app.ui.theme.SuccessDark
 import com.routersync.app.ui.theme.SuccessLight
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Colore di successo coerente con il tema chiaro/scuro (i token semantici non fanno parte dello schema Material di default). */
 @Composable
@@ -89,6 +92,7 @@ fun DashboardScreen(
     onEditProfile: (Long) -> Unit,
     onBrowseProfile: (Long) -> Unit,
     onAdminBrowse: (Long) -> Unit,
+    onOpenSettings: () -> Unit,
     viewModel: SyncViewModel = viewModel()
 ) {
     val profiles by viewModel.profiles.collectAsState()
@@ -137,6 +141,14 @@ fun DashboardScreen(
                                 } else {
                                     showAdminPasswordDialog = true
                                 }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Impostazioni") },
+                            leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenSettings()
                             }
                         )
                     }
@@ -299,6 +311,23 @@ private fun ProfileCard(
     val success = successColor()
     val errorColor = errorSemanticColor()
 
+    // Spazio libero sull'HDD: disponibile solo su SMB, caricato in background senza bloccare l'interfaccia
+    var freeSpaceGb by remember(profile.id) { mutableStateOf<Double?>(null) }
+    LaunchedEffect(profile.id, profile.host, profile.protocol) {
+        if (profile.protocol == RemoteProtocol.SMB) {
+            withContext(Dispatchers.IO) {
+                val client = com.routersync.app.remote.RemoteClientFactory.create(profile)
+                runCatching {
+                    client.connect()
+                    client.freeSpaceBytes()
+                }.getOrNull()?.let { bytes -> freeSpaceGb = bytes / 1_073_741_824.0 }
+                runCatching { client.disconnect() }
+            }
+        }
+    }
+    val settings = remember { com.routersync.app.data.AppSettings(context) }
+    val lowSpace = freeSpaceGb != null && freeSpaceGb!! < settings.storageWarningThresholdGb
+
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
@@ -313,6 +342,14 @@ private fun ProfileCard(
                         "${profile.host} → ${profile.remoteBasePath}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                freeSpaceGb?.let { gb ->
+                    Text(
+                        "%.1f GB liberi".format(gb),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (lowSpace) errorColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(end = 4.dp)
                     )
                 }
                 IconButton(onClick = { if (isSyncing) onCancelSync() else onSyncNow() }) {

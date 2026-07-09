@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -147,11 +148,18 @@ fun LocalFolderPickerContent(
                                 val relPath = relativePathOf(folder)
                                 val lockedByAncestor = ancestorExcluded(relPath)
                                 val selected = relPath !in excluded && !lockedByAncestor
+                                // "Parziale": la cartella stessa non è esclusa, ma contiene qualche
+                                // file/sottocartella esclusi al suo interno (selezione non completa).
+                                val hasPartialExclusions = selected && excluded.any { it.startsWith("$relPath/") }
                                 ListItem(
                                     modifier = Modifier.clickable { currentRelativePath = relPath },
                                     leadingContent = {
                                         Icon(
-                                            if (selected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                                            when {
+                                                hasPartialExclusions -> Icons.Default.RemoveCircle
+                                                selected -> Icons.Default.CheckCircle
+                                                else -> Icons.Default.RadioButtonUnchecked
+                                            },
                                             contentDescription = null,
                                             tint = if (lockedByAncestor) MaterialTheme.colorScheme.outline
                                                 else if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
@@ -159,9 +167,11 @@ fun LocalFolderPickerContent(
                                         )
                                     },
                                     headlineContent = { Text(folder.name ?: "") },
-                                    supportingContent = if (lockedByAncestor) {
-                                        { Text("Cartella superiore esclusa", style = MaterialTheme.typography.labelSmall) }
-                                    } else null,
+                                    supportingContent = when {
+                                        lockedByAncestor -> { { Text("Cartella superiore esclusa", style = MaterialTheme.typography.labelSmall) } }
+                                        hasPartialExclusions -> { { Text("Selezione parziale al suo interno — entra per rivedere", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary) } }
+                                        else -> null
+                                    },
                                     trailingContent = { Icon(Icons.Default.Folder, contentDescription = null) }
                                 )
                                 Divider()

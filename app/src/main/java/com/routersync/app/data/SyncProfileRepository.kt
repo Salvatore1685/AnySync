@@ -29,7 +29,7 @@ class SyncProfileRepository(private val context: Context) {
 
     fun runManualSync(profile: SyncProfile) = scheduler.runManualSync(profile)
 
-    fun cancelSync(profile: SyncProfile) = scheduler.cancelManualSync(profile.id)
+    fun cancelSync(profile: SyncProfile) = scheduler.stopRunningSync(profile)
 
     /** Elimina dal telefono i file già sincronizzati sull'HDD, per liberare spazio su richiesta. */
     suspend fun freeLocalSpace(profile: SyncProfile): FreeSpaceResult = withContext(Dispatchers.IO) {

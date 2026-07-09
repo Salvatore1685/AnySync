@@ -143,9 +143,16 @@ class SyncScheduler(private val context: Context) {
         workManager.cancelUniqueWork(uniqueWorkName(profileId))
     }
 
-    /** Interrompe la sincronizzazione manuale attualmente in corso (se presente), senza toccare le pianificazioni ricorrenti. */
-    fun cancelManualSync(profileId: Long) {
-        workManager.cancelUniqueWork("${uniqueWorkName(profileId)}_manual")
+    /**
+     * Interrompe la sincronizzazione attualmente in corso, sia essa manuale o pianificata.
+     * Dopo l'interruzione, ripristina subito la normale pianificazione futura del profilo
+     * (per una sync oraria/giornaliera/ecc. questo significa: salta questo giro, riparte al
+     * prossimo orario previsto — non elimina la ricorrenza).
+     */
+    fun stopRunningSync(profile: SyncProfile) {
+        workManager.cancelUniqueWork(uniqueWorkName(profile.id))
+        workManager.cancelUniqueWork("${uniqueWorkName(profile.id)}_manual")
+        schedule(profile)
     }
 
     private fun persistWorkId(profileId: Long, workId: String) {
