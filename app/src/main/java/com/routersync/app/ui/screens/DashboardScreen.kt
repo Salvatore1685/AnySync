@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -254,11 +256,25 @@ fun DashboardScreen(
 @Composable
 private fun StatsSummaryCard(profiles: List<SyncProfile>) {
     val activeCount = profiles.count { it.scheduleType != ScheduleType.MANUAL }
-    val totalTransferred = profiles.sumOf { profile ->
-        profile.lastSyncStatus?.let { status ->
-            Regex("""(\d+)""").find(status)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        } ?: 0
+    val context = LocalContext.current
+    val smbProfile = remember(profiles) { profiles.firstOrNull { it.protocol == RemoteProtocol.SMB } }
+
+    var freeSpaceGb by remember(smbProfile?.id) { mutableStateOf<Double?>(null) }
+    LaunchedEffect(smbProfile?.id) {
+        val p = smbProfile ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            val client = com.routersync.app.remote.RemoteClientFactory.create(p)
+            runCatching {
+                client.connect()
+                client.freeSpaceBytes()
+            }.getOrNull()?.let { bytes -> freeSpaceGb = bytes / 1_073_741_824.0 }
+            runCatching { client.disconnect() }
+        }
     }
+    val settings = remember { com.routersync.app.data.AppSettings(context) }
+    val lowSpace = freeSpaceGb != null && freeSpaceGb!! < settings.storageWarningThresholdGb
+    val success = successColor()
+    val errorColor = errorSemanticColor()
 
     ElevatedCard(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 18.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -266,15 +282,24 @@ private fun StatsSummaryCard(profiles: List<SyncProfile>) {
             StatDivider()
             StatItem(value = activeCount.toString(), label = "Pianificate", modifier = Modifier.weight(1f))
             StatDivider()
-            StatItem(value = totalTransferred.toString(), label = "File (ultimo giro)", modifier = Modifier.weight(1f))
+            when {
+                smbProfile == null -> StatItem(value = "—", label = "Spazio HDD", modifier = Modifier.weight(1f))
+                freeSpaceGb == null -> StatItem(value = "…", label = "Spazio HDD", modifier = Modifier.weight(1f))
+                else -> StatItem(
+                    value = "%.0f GB".format(freeSpaceGb),
+                    label = "Liberi su HDD",
+                    modifier = Modifier.weight(1f),
+                    valueColor = if (lowSpace) errorColor else success
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun StatItem(value: String, label: String, modifier: Modifier = Modifier) {
+private fun StatItem(value: String, label: String, modifier: Modifier = Modifier, valueColor: Color = MaterialTheme.colorScheme.primary) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
-        Text(value, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        Text(value, style = MaterialTheme.typography.headlineSmall, color = valueColor, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(2.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -311,23 +336,6 @@ private fun ProfileCard(
     val success = successColor()
     val errorColor = errorSemanticColor()
 
-    // Spazio libero sull'HDD: disponibile solo su SMB, caricato in background senza bloccare l'interfaccia
-    var freeSpaceGb by remember(profile.id) { mutableStateOf<Double?>(null) }
-    LaunchedEffect(profile.id, profile.host, profile.protocol) {
-        if (profile.protocol == RemoteProtocol.SMB) {
-            withContext(Dispatchers.IO) {
-                val client = com.routersync.app.remote.RemoteClientFactory.create(profile)
-                runCatching {
-                    client.connect()
-                    client.freeSpaceBytes()
-                }.getOrNull()?.let { bytes -> freeSpaceGb = bytes / 1_073_741_824.0 }
-                runCatching { client.disconnect() }
-            }
-        }
-    }
-    val settings = remember { com.routersync.app.data.AppSettings(context) }
-    val lowSpace = freeSpaceGb != null && freeSpaceGb!! < settings.storageWarningThresholdGb
-
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
@@ -342,14 +350,6 @@ private fun ProfileCard(
                         "${profile.host} → ${profile.remoteBasePath}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                freeSpaceGb?.let { gb ->
-                    Text(
-                        "%.1f GB liberi".format(gb),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (lowSpace) errorColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(end = 4.dp)
                     )
                 }
                 IconButton(onClick = { if (isSyncing) onCancelSync() else onSyncNow() }) {
@@ -374,10 +374,19 @@ private fun ProfileCard(
             Divider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.height(10.dp))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.horizontalScroll(rememberScrollState())
+            ) {
                 InfoChip(label = scheduleLabel(profile.scheduleType), color = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(6.dp))
                 InfoChip(label = directionLabel(profile.direction), color = MaterialTheme.colorScheme.primary)
+                scheduleTimeLabel(profile)?.let { timeLabel ->
+                    Spacer(Modifier.width(6.dp))
+                    InfoChip(label = timeLabel, color = MaterialTheme.colorScheme.tertiary)
+                }
+                Spacer(Modifier.width(6.dp))
+                InfoChip(label = networkPreferenceLabel(profile.networkPreference), color = MaterialTheme.colorScheme.secondary)
                 if (profile.autoFreeSpaceAfterSync) {
                     Spacer(Modifier.width(6.dp))
                     InfoChip(label = "Auto-libera spazio", color = MaterialTheme.colorScheme.secondary)
@@ -530,4 +539,36 @@ private fun directionLabel(d: SyncDirection) = when (d) {
     SyncDirection.UPLOAD_ONLY -> "Telefono → HDD"
     SyncDirection.DOWNLOAD_ONLY -> "HDD → Telefono"
     SyncDirection.BIDIRECTIONAL -> "Bidirezionale"
+}
+
+/** Etichetta sintetica di giorno/orario pianificato, es. "Lun 14:30" o "Ogni ora, :15". Null per Manuale. */
+private fun scheduleTimeLabel(profile: SyncProfile): String? {
+    val time = "%02d:%02d".format(profile.scheduledHour, profile.scheduledMinute)
+    return when (profile.scheduleType) {
+        ScheduleType.MANUAL -> null
+        ScheduleType.HOURLY -> "Ogni ora, :%02d".format(profile.scheduledMinute)
+        ScheduleType.DAILY -> time
+        ScheduleType.WEEKLY -> "${weekDayShortLabel(profile.scheduledDayOfWeek)} $time"
+        ScheduleType.MONTHLY -> "Il ${profile.scheduledDayOfMonth} del mese, $time"
+    }
+}
+
+private fun weekDayShortLabel(calendarDay: Int) = when (calendarDay) {
+    java.util.Calendar.MONDAY -> "Lun"
+    java.util.Calendar.TUESDAY -> "Mar"
+    java.util.Calendar.WEDNESDAY -> "Mer"
+    java.util.Calendar.THURSDAY -> "Gio"
+    java.util.Calendar.FRIDAY -> "Ven"
+    java.util.Calendar.SATURDAY -> "Sab"
+    java.util.Calendar.SUNDAY -> "Dom"
+    else -> ""
+}
+
+/** Etichetta del tipo di connessione richiesto per l'avvio (non il nome della rete, solo la condizione). */
+private fun networkPreferenceLabel(p: com.routersync.app.data.NetworkPreference) = when (p) {
+    com.routersync.app.data.NetworkPreference.ANY -> "Qualsiasi rete"
+    com.routersync.app.data.NetworkPreference.WIFI_ONLY -> "Solo Wi-Fi"
+    com.routersync.app.data.NetworkPreference.HOME_WIFI_ONLY -> "Solo Wi-Fi di casa"
+    com.routersync.app.data.NetworkPreference.MOBILE_ONLY -> "Solo dati mobili"
+    com.routersync.app.data.NetworkPreference.HOME_WIFI_OR_MOBILE -> "Wi-Fi casa o dati"
 }
