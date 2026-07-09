@@ -39,12 +39,23 @@ class MainActivity : ComponentActivity() {
                     composable("dashboard") {
                         DashboardScreen(
                             onAddProfile = { navController.navigate("wizard") },
+                            onEditProfile = { profileId -> navController.navigate("wizard_edit/$profileId") },
                             onBrowseProfile = { profileId -> navController.navigate("browse/$profileId") },
                             onAdminBrowse = { profileId -> navController.navigate("browse_full/$profileId") }
                         )
                     }
                     composable("wizard") {
                         ProfileWizardScreen(
+                            onDone = { navController.popBackStack() }
+                        )
+                    }
+                    composable(
+                        "wizard_edit/{profileId}",
+                        arguments = listOf(androidx.navigation.navArgument("profileId") { type = androidx.navigation.NavType.LongType })
+                    ) { backStackEntry ->
+                        val profileId = backStackEntry.arguments?.getLong("profileId") ?: 0L
+                        ProfileWizardScreen(
+                            editingProfileId = profileId,
                             onDone = { navController.popBackStack() }
                         )
                     }

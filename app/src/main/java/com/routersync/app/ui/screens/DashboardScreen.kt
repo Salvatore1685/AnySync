@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Lock
@@ -85,6 +86,7 @@ private fun Modifier.clickableNoRipple(interactionSource: MutableInteractionSour
 @Composable
 fun DashboardScreen(
     onAddProfile: () -> Unit,
+    onEditProfile: (Long) -> Unit,
     onBrowseProfile: (Long) -> Unit,
     onAdminBrowse: (Long) -> Unit,
     viewModel: SyncViewModel = viewModel()
@@ -184,6 +186,7 @@ fun DashboardScreen(
                         profile = profile,
                         onSyncNow = { viewModel.runManualSync(profile) },
                         onCancelSync = { viewModel.cancelSync(profile) },
+                        onEdit = { onEditProfile(profile.id) },
                         onDelete = { viewModel.deleteProfile(profile) },
                         onBrowse = { onBrowseProfile(profile.id) },
                         onFreeSpace = { viewModel.freeLocalSpace(profile) },
@@ -275,6 +278,7 @@ private fun ProfileCard(
     profile: SyncProfile,
     onSyncNow: () -> Unit,
     onCancelSync: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
     onBrowse: () -> Unit,
     onFreeSpace: () -> Unit,
@@ -320,6 +324,9 @@ private fun ProfileCard(
                     } else {
                         Icon(Icons.Default.Sync, contentDescription = "Sincronizza ora")
                     }
+                }
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = "Modifica")
                 }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, contentDescription = "Elimina", tint = MaterialTheme.colorScheme.error)

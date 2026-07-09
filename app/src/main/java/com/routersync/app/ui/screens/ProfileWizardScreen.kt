@@ -45,9 +45,15 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel()) {
+fun ProfileWizardScreen(
+    editingProfileId: Long = 0L,
+    onDone: () -> Unit,
+    viewModel: SyncViewModel = viewModel()
+) {
     val context = LocalContext.current
     var step by remember { mutableIntStateOf(0) }
+    val isEditing = editingProfileId != 0L
+    val profiles by viewModel.profiles.collectAsState()
 
     // --- Stato raccolto lungo il wizard ---
     var localUri by remember { mutableStateOf<Uri?>(null) }
@@ -75,6 +81,41 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
     var networkPreference by remember { mutableStateOf(NetworkPreference.ANY) }
     var requiresCharging by remember { mutableStateOf(false) }
     var homeWifiSsids by remember { mutableStateOf<List<String>>(emptyList()) }
+    var prefilled by remember { mutableStateOf(false) }
+
+    // In modalità modifica, precompila tutti i campi con i valori del profilo esistente
+    LaunchedEffect(profiles, isEditing) {
+        if (isEditing && !prefilled) {
+            profiles.find { it.id == editingProfileId }?.let { p ->
+                localUri = Uri.parse(p.localFolderUri)
+                localDisplayName = p.localFolderDisplayName
+                syncName = p.name
+                protocol = p.protocol
+                host = p.host
+                port = p.port
+                username = p.username
+                password = p.password
+                if (p.protocol == RemoteProtocol.SMB && p.remoteBasePath.contains("/")) {
+                    remoteBaseShare = p.remoteBasePath.substringBefore("/")
+                    remoteFolderName = p.remoteBasePath.substringAfter("/")
+                } else {
+                    remoteFolderName = p.remoteBasePath
+                }
+                scheduleType = p.scheduleType
+                direction = p.direction
+                autoFreeSpace = p.autoFreeSpaceAfterSync
+                mirrorDeletes = p.mirrorDeletes
+                scheduledHour = p.scheduledHour
+                scheduledMinute = p.scheduledMinute
+                scheduledDayOfWeek = p.scheduledDayOfWeek
+                scheduledDayOfMonth = p.scheduledDayOfMonth
+                networkPreference = p.networkPreference
+                requiresCharging = p.requiresCharging
+                homeWifiSsids = com.routersync.app.work.NetworkConditionChecker.homeSsidList(p.homeWifiSsid)
+                prefilled = true
+            }
+        }
+    }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -89,7 +130,7 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Nuova sincronizzazione (${step + 1}/4)") }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Text("${if (isEditing) "Modifica sincronizzazione" else "Nuova sincronizzazione"} (${step + 1}/4)") }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 when (step) {
@@ -158,6 +199,7 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
                                 "$remoteBaseShare/$remoteFolderName" else remoteFolderName
                             viewModel.saveProfile(
                                 SyncProfile(
+                                    id = editingProfileId,
                                     name = syncName,
                                     protocol = protocol, host = host, port = port,
                                     username = username, password = password,
@@ -176,7 +218,7 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
                             onDone()
                         }
                     }
-                ) { Text(if (step < 3) "Avanti" else "Crea sincronizzazione") }
+                ) { Text(if (step < 3) "Avanti" else if (isEditing) "Salva modifiche" else "Crea sincronizzazione") }
             }
         }
     }
