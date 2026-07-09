@@ -252,14 +252,32 @@ class SyncEngine(private val context: Context) {
             } else {
                 onProgress?.invoke(name, 0, 0)
                 val remoteChild = remoteChildren[name]
-                val shouldUpload = remoteChild == null ||
-                    (direction == SyncDirection.BIDIRECTIONAL && child.lastModified() > remoteChild.lastModified)
-                if (shouldUpload) {
-                    context.contentResolver.openInputStream(child.uri)?.use { input ->
-                        client.upload(joinPath(remotePath, name), input, child.length())
+                when {
+                    remoteChild == null -> {
+                        context.contentResolver.openInputStream(child.uri)?.use { input ->
+                            client.upload(joinPath(remotePath, name), input, child.length())
+                        }
+                        transferred++
+                        if (autoFreeSpace) child.delete()
                     }
-                    transferred++
-                    if (autoFreeSpace) child.delete()
+                    remoteChild.size != child.length() -> {
+                        // Stesso nome ma dimensione diversa: non è lo stesso file (es. foto
+                        // omonime scattate da telefoni diversi). Manteniamo entrambe invece di
+                        // sovrascrivere silenziosamente, aggiungendo un suffisso al nuovo arrivo.
+                        val uniqueName = uniqueSuffixedName(name, remoteChildren.keys)
+                        context.contentResolver.openInputStream(child.uri)?.use { input ->
+                            client.upload(joinPath(remotePath, uniqueName), input, child.length())
+                        }
+                        transferred++
+                        if (autoFreeSpace) child.delete()
+                    }
+                    direction == SyncDirection.BIDIRECTIONAL && child.lastModified() > remoteChild.lastModified -> {
+                        context.contentResolver.openInputStream(child.uri)?.use { input ->
+                            client.upload(joinPath(remotePath, name), input, child.length())
+                        }
+                        transferred++
+                        if (autoFreeSpace) child.delete()
+                    }
                 }
                 if (isCancelled()) return transferred to true
             }
@@ -423,6 +441,20 @@ class SyncEngine(private val context: Context) {
     }
 
     private fun joinPath(base: String, sub: String): String = if (base.isBlank()) sub else "$base/$sub"
+
+    /** Genera un nome tipo "foto (1).jpg" che non collida con nessuno di [existingNames]. */
+    private fun uniqueSuffixedName(originalName: String, existingNames: Set<String>): String {
+        val dotIndex = originalName.lastIndexOf('.')
+        val base = if (dotIndex > 0) originalName.substring(0, dotIndex) else originalName
+        val ext = if (dotIndex > 0) originalName.substring(dotIndex) else ""
+        var candidate: String
+        var n = 1
+        do {
+            candidate = "$base ($n)$ext"
+            n++
+        } while (existingNames.contains(candidate))
+        return candidate
+    }
 
     /** Percorso della cartella scelta in fase di configurazione, corretto per ogni protocollo (per SMB va tolto il nome della share). */
     private fun remoteRelativeRoot(profile: SyncProfile): String =

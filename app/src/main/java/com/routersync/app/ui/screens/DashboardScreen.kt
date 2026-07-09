@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Lock
@@ -302,6 +303,7 @@ private fun ProfileCard(
 ) {
     val context = LocalContext.current
     var showFreeSpaceConfirm by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
     val workManager = remember { WorkManager.getInstance(context) }
     val manualWorkInfos by workManager
         .getWorkInfosForUniqueWorkFlow("sync_profile_${profile.id}_manual")
@@ -422,7 +424,10 @@ private fun ProfileCard(
                 }
                 Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
                 Spacer(Modifier.width(6.dp))
-                Text("Ultima sync: $lastSync", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Ultima sync: $lastSync", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                IconButton(onClick = { showHistory = true }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.History, contentDescription = "Cronologia", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             profile.lastSyncStatus?.let {
                 val statusColor = when {
@@ -474,6 +479,59 @@ private fun ProfileCard(
             dismissButton = { TextButton(onClick = { showFreeSpaceConfirm = false }) { Text("Annulla") } }
         )
     }
+
+    if (showHistory) {
+        SyncHistoryDialog(profileId = profile.id, onDismiss = { showHistory = false })
+    }
+}
+
+/** Elenco scorrevole degli ultimi tentativi di sincronizzazione per un profilo, con esito e dettagli. */
+@Composable
+private fun SyncHistoryDialog(profileId: Long, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val logDao = remember { com.routersync.app.data.AppDatabase.getInstance(context).syncLogDao() }
+    val entries by logDao.observeForProfile(profileId).collectAsState(initial = emptyList())
+    val success = successColor()
+    val errorColor = errorSemanticColor()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cronologia sincronizzazioni") },
+        text = {
+            if (entries.isEmpty()) {
+                Text("Nessuna sincronizzazione ancora registrata.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                    items(entries, key = { it.id }) { entry ->
+                        val color = when {
+                            entry.cancelled -> MaterialTheme.colorScheme.tertiary
+                            entry.success -> success
+                            else -> errorColor
+                        }
+                        Column(Modifier.padding(vertical = 8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(entry.timestamp)),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            Text(
+                                entry.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp)
+                            )
+                        }
+                        Divider()
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Chiudi") } }
+    )
 }
 
 /** Bottone in stile "outlined card": bordo sottile, angoli morbidi, icona + testo centrati. */

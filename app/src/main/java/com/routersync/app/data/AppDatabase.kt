@@ -84,10 +84,33 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
-@Database(entities = [SyncProfile::class], version = 5, exportSchema = false)
+/**
+ * Migrazione dalla versione 5 alla 6: crea la nuova tabella per la cronologia dettagliata
+ * delle sincronizzazioni. Non tocca i dati esistenti dei profili.
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS sync_log_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                profileId INTEGER NOT NULL,
+                timestamp INTEGER NOT NULL,
+                success INTEGER NOT NULL,
+                cancelled INTEGER NOT NULL,
+                message TEXT NOT NULL,
+                filesTransferred INTEGER NOT NULL
+            )
+            """
+        )
+    }
+}
+
+@Database(entities = [SyncProfile::class, SyncLogEntry::class], version = 6, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun syncProfileDao(): SyncProfileDao
+    abstract fun syncLogDao(): SyncLogDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -99,7 +122,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "routersync.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build().also { INSTANCE = it }
             }
     }

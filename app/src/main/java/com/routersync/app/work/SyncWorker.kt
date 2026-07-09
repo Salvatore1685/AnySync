@@ -74,6 +74,19 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
                 else -> result.message
             }
         )
+
+        val logDao = AppDatabase.getInstance(applicationContext).syncLogDao()
+        logDao.insert(
+            com.routersync.app.data.SyncLogEntry(
+                profileId = profile.id,
+                timestamp = System.currentTimeMillis(),
+                success = result.success,
+                cancelled = result.cancelled,
+                message = if (result.success) "${result.filesTransferred} file trasferiti" else result.message,
+                filesTransferred = result.filesTransferred
+            )
+        )
+        logDao.trimOldEntries(profile.id)
         result.updatedManifest?.let { manifest ->
             dao.updateManifest(profile.id, manifest)
         }
