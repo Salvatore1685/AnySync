@@ -4,8 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.webkit.MimeTypeMap
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -15,6 +18,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.documentfile.provider.DocumentFile
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -29,7 +33,9 @@ import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.documentfile.provider.DocumentFile
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -104,6 +110,75 @@ fun RemoteBrowserContent(
     var viewingImageIndex by remember { mutableStateOf<Int?>(null) }
     var openingFile by remember { mutableStateOf<RemoteEntry?>(null) }
     var sharingBusy by remember { mutableStateOf(false) }
+    var downloadingBusy by remember { mutableStateOf(false) }
+    var pendingDownloadSingle by remember { mutableStateOf<RemoteEntry?>(null) }
+    var pendingDownloadMultiple by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
+
+    // Selettore di sistema "Salva con nome": per scaricare un singolo file dove preferisce l'utente
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("*/*")
+    ) { uri: Uri? ->
+        val entry = pendingDownloadSingle
+        pendingDownloadSingle = null
+        if (uri != null && entry != null) {
+            downloadingBusy = true
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { out -> client.download(entry.path, out) }
+                }
+                downloadingBusy = false
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "\"${entry.name}\" salvato sul telefono", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // Selettore di sistema "Scegli cartella": per scaricare più file insieme nella cartella scelta
+    val openTreeLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        val entries = pendingDownloadMultiple.filter { !it.isDirectory }
+        pendingDownloadMultiple = emptyList()
+        if (treeUri != null && entries.isNotEmpty()) {
+            downloadingBusy = true
+            scope.launch(Dispatchers.IO) {
+                val destDir = DocumentFile.fromTreeUri(context, treeUri)
+                var saved = 0
+                for (entry in entries) {
+                    runCatching {
+                        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                            entry.name.substringAfterLast('.', "").lowercase()
+                        ) ?: "application/octet-stream"
+                        val target = destDir?.createFile(mime, entry.name)
+                        target?.let { doc ->
+                            context.contentResolver.openOutputStream(doc.uri)?.use { out -> client.download(entry.path, out) }
+                        }
+                        saved++
+                    }
+                }
+                downloadingBusy = false
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "$saved file salvati sul telefono", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun downloadSingle(entry: RemoteEntry) {
+        pendingDownloadSingle = entry
+        createDocumentLauncher.launch(entry.name)
+    }
+
+    fun downloadMultiple(targets: List<RemoteEntry>) {
+        val files = targets.filter { !it.isDirectory }
+        if (files.isEmpty()) {
+            Toast.makeText(context, "Seleziona almeno un file (le cartelle non si possono scaricare così)", Toast.LENGTH_LONG).show()
+            return
+        }
+        pendingDownloadMultiple = files
+        openTreeLauncher.launch(null)
+    }
     // Cache delle sole MINIATURE già decodificate e ridimensionate (leggere): niente byte grezzi qui.
     val thumbnailCache = remember { mutableStateMapOf<String, Bitmap?>() }
 
@@ -271,6 +346,9 @@ fun RemoteBrowserContent(
                 },
                 actions = {
                     if (selectionMode) {
+                        IconButton(onClick = { downloadMultiple(displayedEntries.filter { selectedPaths.contains(it.path) }) }, enabled = selectedPaths.isNotEmpty()) {
+                            Icon(Icons.Default.Download, contentDescription = "Scarica sul telefono")
+                        }
                         IconButton(onClick = { performShare(displayedEntries.filter { selectedPaths.contains(it.path) }) }, enabled = selectedPaths.isNotEmpty()) {
                             Icon(Icons.Default.Share, contentDescription = "Condividi selezionati")
                         }
@@ -347,6 +425,7 @@ fun RemoteBrowserContent(
                 openingFile?.let { entry -> BusyOverlay("Apertura ${entry.name}…") }
                 if (deleting) BusyOverlay("Eliminazione in corso…")
                 if (sharingBusy) BusyOverlay("Preparazione condivisione…")
+                if (downloadingBusy) BusyOverlay("Salvataggio in corso…")
             }
         }
     }
@@ -395,6 +474,7 @@ fun RemoteBrowserContent(
             images = imageEntries,
             startIndex = startIndex,
             onShare = { entry -> performShare(listOf(entry)) },
+            onDownload = { entry -> downloadSingle(entry) },
             onDismiss = { viewingImageIndex = null }
         )
     }
@@ -649,6 +729,7 @@ private fun ImagePagerViewer(
     images: List<RemoteEntry>,
     startIndex: Int,
     onShare: (RemoteEntry) -> Unit,
+    onDownload: (RemoteEntry) -> Unit,
     onDismiss: () -> Unit
 ) {
     if (images.isEmpty()) return
@@ -687,6 +768,9 @@ private fun ImagePagerViewer(
             }
 
             Row(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                IconButton(onClick = { onDownload(images[pagerState.currentPage]) }) {
+                    Icon(Icons.Default.Download, contentDescription = "Scarica sul telefono", tint = Color.White)
+                }
                 IconButton(onClick = { onShare(images[pagerState.currentPage]) }) {
                     Icon(Icons.Default.Share, contentDescription = "Condividi", tint = Color.White)
                 }
