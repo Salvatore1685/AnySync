@@ -81,6 +81,8 @@ fun ProfileWizardScreen(
     var networkPreference by remember { mutableStateOf(NetworkPreference.ANY) }
     var requiresCharging by remember { mutableStateOf(false) }
     var homeWifiSsids by remember { mutableStateOf<List<String>>(emptyList()) }
+    var excludedPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showFolderPicker by remember { mutableStateOf(false) }
     var prefilled by remember { mutableStateOf(false) }
 
     // In modalità modifica, precompila tutti i campi con i valori del profilo esistente
@@ -112,6 +114,7 @@ fun ProfileWizardScreen(
                 networkPreference = p.networkPreference
                 requiresCharging = p.requiresCharging
                 homeWifiSsids = com.routersync.app.work.NetworkConditionChecker.homeSsidList(p.homeWifiSsid)
+                excludedPaths = com.routersync.app.sync.excludedPathSet(p.excludedPaths)
                 prefilled = true
             }
         }
@@ -138,7 +141,9 @@ fun ProfileWizardScreen(
                         displayName = localDisplayName,
                         syncName = syncName,
                         onSyncNameChange = { syncName = it },
-                        onPick = { folderPicker.launch(null) }
+                        onPick = { folderPicker.launch(null) },
+                        onRefineSelection = { showFolderPicker = true },
+                        excludedCount = excludedPaths.size
                     )
                     1 -> StepRemoteDevice(
                         selectedDevice = selectedDevice,
@@ -212,7 +217,8 @@ fun ProfileWizardScreen(
                                     scheduledHour = scheduledHour, scheduledMinute = scheduledMinute,
                                     scheduledDayOfWeek = scheduledDayOfWeek, scheduledDayOfMonth = scheduledDayOfMonth,
                                     networkPreference = networkPreference, requiresCharging = requiresCharging,
-                                    homeWifiSsid = com.routersync.app.work.NetworkConditionChecker.joinHomeSsidList(homeWifiSsids)
+                                    homeWifiSsid = com.routersync.app.work.NetworkConditionChecker.joinHomeSsidList(homeWifiSsids),
+                                    excludedPaths = com.routersync.app.sync.joinExcludedPathSet(excludedPaths)
                                 )
                             )
                             onDone()
@@ -222,6 +228,15 @@ fun ProfileWizardScreen(
             }
         }
     }
+
+    if (showFolderPicker && localUri != null) {
+        LocalFolderPickerContent(
+            rootUri = localUri!!,
+            initialExcluded = excludedPaths,
+            onDone = { newExcluded -> excludedPaths = newExcluded; showFolderPicker = false },
+            onCancel = { showFolderPicker = false }
+        )
+    }
 }
 
 @Composable
@@ -229,7 +244,9 @@ private fun StepLocalFolder(
     displayName: String,
     syncName: String,
     onSyncNameChange: (String) -> Unit,
-    onPick: () -> Unit
+    onPick: () -> Unit,
+    onRefineSelection: () -> Unit,
+    excludedCount: Int
 ) {
     Text("1. Nome e cartella da sincronizzare", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
@@ -245,6 +262,16 @@ private fun StepLocalFolder(
     Text("Scegli la cartella sul telefono da tenere sincronizzata con l'HDD del router. L'app chiederà il permesso di accesso solo a questa cartella.")
     Spacer(Modifier.height(16.dp))
     OutlinedButton(onClick = onPick) { Text(if (displayName.isBlank()) "Scegli cartella…" else "Cartella scelta: $displayName") }
+
+    if (displayName.isNotBlank()) {
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onRefineSelection, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                if (excludedCount == 0) "Scegli cosa sincronizzare (tutto incluso)"
+                else "Scegli cosa sincronizzare ($excludedCount escluso/i)"
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

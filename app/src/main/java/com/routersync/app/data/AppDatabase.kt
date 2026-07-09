@@ -62,7 +62,18 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-@Database(entities = [SyncProfile::class], version = 3, exportSchema = false)
+/**
+ * Migrazione dalla versione 3 alla 4: aggiunge il campo per la selezione fine di cartelle e
+ * file da sincronizzare. I profili esistenti ricevono null (nessuna esclusione = tutto
+ * incluso, come già era prima).
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE sync_profiles ADD COLUMN excludedPaths TEXT")
+    }
+}
+
+@Database(entities = [SyncProfile::class], version = 4, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun syncProfileDao(): SyncProfileDao
@@ -77,7 +88,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "routersync.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build().also { INSTANCE = it }
             }
     }

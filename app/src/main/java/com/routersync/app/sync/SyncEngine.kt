@@ -58,6 +58,7 @@ class SyncEngine(private val context: Context) {
             if (!client.exists(allPath)) client.mkdirs(allPath)
 
             var updatedManifest: String? = null
+            val excluded = excludedPathSet(profile.excludedPaths)
 
             if (profile.direction == SyncDirection.BIDIRECTIONAL && profile.mirrorDeletes) {
                 // Merge a tre vie con propagazione delle cancellazioni, basato sul registro precedente
@@ -66,7 +67,7 @@ class SyncEngine(private val context: Context) {
                 val newManifest = mutableSetOf<String>()
                 val (count, cancelled) = mirrorBidirectionalWithDeletes(
                     client, localRoot, allPath, "", previousManifest,
-                    profile.autoFreeSpaceAfterSync, onProgress, isCancelled, newManifest
+                    profile.autoFreeSpaceAfterSync, excluded, onProgress, isCancelled, newManifest
                 )
                 transferred += count
                 wasCancelled = cancelled
@@ -74,7 +75,7 @@ class SyncEngine(private val context: Context) {
             } else {
                 // Comportamento "solo aggiunta": non cancella mai nulla in automatico
                 if (profile.direction == SyncDirection.UPLOAD_ONLY || profile.direction == SyncDirection.BIDIRECTIONAL) {
-                    val (count, cancelled) = mirrorUpload(client, localRoot, allPath, profile.direction, profile.autoFreeSpaceAfterSync, onProgress, isCancelled)
+                    val (count, cancelled) = mirrorUpload(client, localRoot, allPath, profile.direction, profile.autoFreeSpaceAfterSync, excluded, "", onProgress, isCancelled)
                     transferred += count
                     wasCancelled = wasCancelled || cancelled
                 }
@@ -228,6 +229,8 @@ class SyncEngine(private val context: Context) {
         remotePath: String,
         direction: SyncDirection,
         autoFreeSpace: Boolean,
+        excluded: Set<String>,
+        localRelativePath: String,
         onProgress: ProgressCallback?,
         isCancelled: () -> Boolean
     ): Pair<Int, Boolean> {
@@ -239,8 +242,11 @@ class SyncEngine(private val context: Context) {
 
         for (child in localChildren) {
             val name = child.name ?: continue
+            val childRelativePath = if (localRelativePath.isBlank()) name else "$localRelativePath/$name"
+            if (isPathExcluded(childRelativePath, excluded)) continue // escluso dall'utente in fase di selezione
+
             if (child.isDirectory) {
-                val (count, cancelled) = mirrorUpload(client, child, joinPath(remotePath, name), direction, autoFreeSpace, onProgress, isCancelled)
+                val (count, cancelled) = mirrorUpload(client, child, joinPath(remotePath, name), direction, autoFreeSpace, excluded, childRelativePath, onProgress, isCancelled)
                 transferred += count
                 if (cancelled) return transferred to true
             } else {
@@ -315,6 +321,7 @@ class SyncEngine(private val context: Context) {
         relativePrefix: String,
         previousManifest: Set<String>,
         autoFreeSpace: Boolean,
+        excluded: Set<String>,
         onProgress: ProgressCallback?,
         isCancelled: () -> Boolean,
         newManifest: MutableSet<String>
@@ -329,6 +336,7 @@ class SyncEngine(private val context: Context) {
         for (name in allNames) {
             if (name.isBlank()) continue
             val relPath = if (relativePrefix.isBlank()) name else "$relativePrefix/$name"
+            if (isPathExcluded(relPath, excluded)) continue // escluso dall'utente in fase di selezione
             val localChild = localChildren[name]
             val remoteChild = remoteChildren[name]
             val wasKnownBefore = previousManifest.contains(relPath) || previousManifest.any { it.startsWith("$relPath/") }
@@ -350,7 +358,7 @@ class SyncEngine(private val context: Context) {
                 val subLocalDir = (localChild as? DocumentFile) ?: localDir.createDirectory(name) ?: continue
                 val (count, cancelled) = mirrorBidirectionalWithDeletes(
                     client, subLocalDir, joinPath(remotePath, name), relPath,
-                    previousManifest, autoFreeSpace, onProgress, isCancelled, newManifest
+                    previousManifest, autoFreeSpace, excluded, onProgress, isCancelled, newManifest
                 )
                 transferred += count
                 newManifest += relPath

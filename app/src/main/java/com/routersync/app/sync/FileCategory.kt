@@ -17,6 +17,17 @@ fun sanitizeFolderName(name: String): String {
     return cleaned.ifBlank { "Sync" }
 }
 
+/** Converte il campo testuale (una riga per percorso) in un insieme di percorsi esclusi dalla sync. */
+fun excludedPathSet(stored: String?): Set<String> =
+    stored?.split("\n")?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+
+fun joinExcludedPathSet(set: Set<String>): String? =
+    set.filter { it.isNotBlank() }.distinct().joinToString("\n").ifBlank { null }
+
+/** True se [relativePath] (o una sua cartella superiore) è stato escluso dalla sincronizzazione. */
+fun isPathExcluded(relativePath: String, excluded: Set<String>): Boolean =
+    excluded.any { relativePath == it || relativePath.startsWith("$it/") }
+
 private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif")
 private val VIDEO_EXTENSIONS = setOf("mp4", "mov", "mkv", "avi", "webm", "3gp", "m4v", "wmv")
 private val AUDIO_EXTENSIONS = setOf("mp3", "wav", "aac", "flac", "ogg", "m4a", "wma", "opus")

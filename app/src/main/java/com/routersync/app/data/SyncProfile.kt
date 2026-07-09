@@ -76,6 +76,9 @@ data class SyncProfile(
     val autoFreeSpaceAfterSync: Boolean = false, // elimina dal telefono i file appena caricati sull'HDD
     val mirrorDeletes: Boolean = false,          // solo per BIDIRECTIONAL: propaga le cancellazioni su entrambi i lati
 
+    // --- Selezione fine di cosa sincronizzare ---
+    val excludedPaths: String? = null, // percorsi relativi (separati da "\n") esclusi dalla sync, di default tutto è incluso
+
     // --- Stato ---
     val lastSyncTimestamp: Long? = null,
     val lastSyncStatus: String? = null, // "OK", "ERRORE: ...", null se mai eseguita
