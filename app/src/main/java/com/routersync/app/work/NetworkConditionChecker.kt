@@ -94,4 +94,28 @@ object NetworkConditionChecker {
             }
         }
     }
+
+    /**
+     * Cerca le reti Wi-Fi visibili nei dintorni. Android limita molto la possibilità di
+     * avviare una scansione esplicita (per risparmio batteria): questa funzione la richiede
+     * comunque (best-effort, il sistema può ignorarla se chiamata troppo di frequente), poi
+     * legge l'elenco più recente disponibile — che il telefono tiene comunque aggiornato in
+     * background mentre il Wi-Fi è acceso, quindi il risultato resta utile anche quando la
+     * richiesta esplicita viene ignorata.
+     */
+    @Suppress("DEPRECATION")
+    fun scanNearbyNetworks(context: Context): List<String> {
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            ?: return emptyList()
+        return try {
+            runCatching { wifiManager.startScan() }
+            wifiManager.scanResults
+                .sortedByDescending { it.level } // segnale più forte prima
+                .mapNotNull { it.SSID?.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+        } catch (e: SecurityException) {
+            emptyList()
+        }
+    }
 }

@@ -11,7 +11,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -561,6 +563,38 @@ private fun StepSchedule(
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Cerca le reti Wi-Fi visibili nei dintorni (non solo quella a cui sei connesso ora)
+                    var nearbyNetworks by remember { mutableStateOf<List<String>>(emptyList()) }
+                    var scanning by remember { mutableStateOf(false) }
+                    OutlinedButton(
+                        onClick = {
+                            scanning = true
+                            nearbyNetworks = com.routersync.app.work.NetworkConditionChecker.scanNearbyNetworks(context)
+                            scanning = false
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (scanning) "Ricerca in corso…" else "Cerca reti Wi-Fi vicine")
+                    }
+                    if (nearbyNetworks.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Column {
+                            nearbyNetworks.filter { it !in homeWifiSsids }.forEach { ssid ->
+                                ListItem(
+                                    headlineContent = { Text(ssid) },
+                                    leadingContent = { Icon(Icons.Default.Wifi, contentDescription = null) },
+                                    trailingContent = { Icon(Icons.Default.Add, contentDescription = "Aggiungi") },
+                                    modifier = Modifier.clickableSelect {
+                                        onHomeWifiSsidsChange(homeWifiSsids + ssid)
+                                    }
+                                )
+                                Divider()
                             }
                         }
                     }
