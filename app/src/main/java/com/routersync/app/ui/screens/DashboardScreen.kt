@@ -256,24 +256,7 @@ fun DashboardScreen(
 @Composable
 private fun StatsSummaryCard(profiles: List<SyncProfile>) {
     val activeCount = profiles.count { it.scheduleType != ScheduleType.MANUAL }
-    val context = LocalContext.current
-    val smbProfile = remember(profiles) { profiles.firstOrNull { it.protocol == RemoteProtocol.SMB } }
-
-    var freeSpaceGb by remember(smbProfile?.id) { mutableStateOf<Double?>(null) }
-    LaunchedEffect(smbProfile?.id) {
-        val p = smbProfile ?: return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            val client = com.routersync.app.remote.RemoteClientFactory.create(p)
-            runCatching {
-                client.connect()
-                client.freeSpaceBytes()
-            }.getOrNull()?.let { bytes -> freeSpaceGb = bytes / 1_073_741_824.0 }
-            runCatching { client.disconnect() }
-        }
-    }
-    val settings = remember { com.routersync.app.data.AppSettings(context) }
-    val lowSpace = freeSpaceGb != null && freeSpaceGb!! < settings.storageWarningThresholdGb
-    val success = successColor()
+    val errorCount = profiles.count { it.lastSyncStatus != null && !it.lastSyncStatus!!.startsWith("OK") && !it.lastSyncStatus!!.startsWith("In attesa") }
     val errorColor = errorSemanticColor()
 
     ElevatedCard(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)) {
@@ -282,16 +265,12 @@ private fun StatsSummaryCard(profiles: List<SyncProfile>) {
             StatDivider()
             StatItem(value = activeCount.toString(), label = "Pianificate", modifier = Modifier.weight(1f))
             StatDivider()
-            when {
-                smbProfile == null -> StatItem(value = "—", label = "Spazio HDD", modifier = Modifier.weight(1f))
-                freeSpaceGb == null -> StatItem(value = "…", label = "Spazio HDD", modifier = Modifier.weight(1f))
-                else -> StatItem(
-                    value = "%.0f GB".format(freeSpaceGb),
-                    label = "Liberi su HDD",
-                    modifier = Modifier.weight(1f),
-                    valueColor = if (lowSpace) errorColor else success
-                )
-            }
+            StatItem(
+                value = errorCount.toString(),
+                label = "Con errori",
+                modifier = Modifier.weight(1f),
+                valueColor = if (errorCount > 0) errorColor else MaterialTheme.colorScheme.primary
+            )
         }
     }
 }
@@ -336,11 +315,38 @@ private fun ProfileCard(
     val success = successColor()
     val errorColor = errorSemanticColor()
 
+    // Spazio libero sull'HDD di questa specifica sync: disponibile solo su SMB, caricato in background
+    var freeSpaceGb by remember(profile.id) { mutableStateOf<Double?>(null) }
+    LaunchedEffect(profile.id, profile.host, profile.protocol) {
+        if (profile.protocol == RemoteProtocol.SMB) {
+            withContext(Dispatchers.IO) {
+                val client = com.routersync.app.remote.RemoteClientFactory.create(profile)
+                runCatching {
+                    client.connect()
+                    client.freeSpaceBytes()
+                }.getOrNull()?.let { bytes -> freeSpaceGb = bytes / 1_073_741_824.0 }
+                runCatching { client.disconnect() }
+            }
+        }
+    }
+    val lowSpace = freeSpaceGb != null && freeSpaceGb!! < profile.storageWarningThresholdGb
+
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
+            freeSpaceGb?.let { gb ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Text(
+                        "%.1f GB liberi su HDD".format(gb),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (lowSpace) FontWeight.Bold else FontWeight.Normal,
+                        color = if (lowSpace) errorColor else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ProtocolAvatar(profile.protocol)
                 Spacer(Modifier.width(12.dp))

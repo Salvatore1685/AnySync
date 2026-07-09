@@ -6,8 +6,17 @@ import android.content.Context
 class AppSettings(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
 
-    /** Soglia (in GB) sotto la quale mostrare un avviso di spazio HDD in esaurimento. */
-    var storageWarningThresholdGb: Int
-        get() = prefs.getInt("storage_warning_gb", 5)
-        set(value) = prefs.edit().putInt("storage_warning_gb", value).apply()
+    /** Se false, non viene mai inviata alcuna notifica di spazio HDD in esaurimento. */
+    var lowSpaceNotificationsEnabled: Boolean
+        get() = prefs.getBoolean("low_space_notif_enabled", true)
+        set(value) = prefs.edit().putBoolean("low_space_notif_enabled", value).apply()
+
+    /** Timestamp (epoch millis) fino al quale le notifiche di spazio sono posticipate temporaneamente. */
+    var lowSpaceNotificationSnoozeUntil: Long
+        get() = prefs.getLong("low_space_notif_snooze_until", 0L)
+        set(value) = prefs.edit().putLong("low_space_notif_snooze_until", value).apply()
+
+    /** True se in questo momento le notifiche di spazio vanno effettivamente inviate. */
+    fun shouldNotifyLowSpace(): Boolean =
+        lowSpaceNotificationsEnabled && System.currentTimeMillis() > lowSpaceNotificationSnoozeUntil
 }

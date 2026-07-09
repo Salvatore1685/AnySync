@@ -79,6 +79,9 @@ data class SyncProfile(
     // --- Selezione fine di cosa sincronizzare ---
     val excludedPaths: String? = null, // percorsi relativi (separati da "\n") esclusi dalla sync, di default tutto è incluso
 
+    // --- Avviso spazio HDD (specifico per questa sync, dato che HDD diversi hanno capacità diverse) ---
+    val storageWarningThresholdGb: Int = 5,
+
     // --- Stato ---
     val lastSyncTimestamp: Long? = null,
     val lastSyncStatus: String? = null, // "OK", "ERRORE: ...", null se mai eseguita

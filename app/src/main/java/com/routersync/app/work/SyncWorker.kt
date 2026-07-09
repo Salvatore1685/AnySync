@@ -25,6 +25,8 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_PROFILE_ID = "profile_id"
         private const val CHANNEL_ID = "sync_channel"
         private const val NOTIFICATION_ID = 42
+        private const val LOW_SPACE_CHANNEL_ID = "low_space_channel"
+        private const val LOW_SPACE_NOTIFICATION_ID_BASE = 10_000
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -76,6 +78,8 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             dao.updateManifest(profile.id, manifest)
         }
 
+        checkLowSpaceAndNotify(profile)
+
         // Per Giornaliera/Settimanale/Mensile, ri-pianifichiamo qui il prossimo avvio preciso
         // (WorkManager non supporta nativamente intervalli allineati a un giorno/ora specifici).
         if (profile.scheduleType == ScheduleType.DAILY ||
@@ -110,6 +114,43 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             .setOngoing(true)
             .apply { if (total > 0) setProgress(total, done, false) }
             .build()
+
+    /** Controlla lo spazio libero sull'HDD di questa sync e, se sotto soglia, invia una notifica dedicata. */
+    private fun checkLowSpaceAndNotify(profile: com.routersync.app.data.SyncProfile) {
+        if (profile.protocol != com.routersync.app.data.RemoteProtocol.SMB) return
+        val settings = com.routersync.app.data.AppSettings(applicationContext)
+        if (!settings.shouldNotifyLowSpace()) return
+
+        val client = com.routersync.app.remote.RemoteClientFactory.create(profile)
+        val freeGb = runCatching {
+            client.connect()
+            client.freeSpaceBytes()
+        }.getOrNull()?.let { it / 1_073_741_824.0 }
+        runCatching { client.disconnect() }
+
+        if (freeGb != null && freeGb < profile.storageWarningThresholdGb) {
+            createLowSpaceChannelIfNeeded()
+            val notification = NotificationCompat.Builder(applicationContext, LOW_SPACE_CHANNEL_ID)
+                .setContentTitle("Spazio HDD in esaurimento")
+                .setContentText("\"${profile.name}\": solo %.1f GB liberi rimasti (soglia: ${profile.storageWarningThresholdGb} GB)".format(freeGb))
+                .setSmallIcon(R.drawable.ic_sync)
+                .setAutoCancel(true)
+                .build()
+            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(LOW_SPACE_NOTIFICATION_ID_BASE + profile.id.toInt(), notification)
+        }
+    }
+
+    private fun createLowSpaceChannelIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (nm.getNotificationChannel(LOW_SPACE_CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(LOW_SPACE_CHANNEL_ID, "Spazio HDD in esaurimento", NotificationManager.IMPORTANCE_DEFAULT)
+                )
+            }
+        }
+    }
 
     private fun createChannelIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

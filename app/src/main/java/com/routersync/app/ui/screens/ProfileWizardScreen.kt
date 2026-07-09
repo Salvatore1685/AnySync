@@ -81,6 +81,7 @@ fun ProfileWizardScreen(
     var networkPreference by remember { mutableStateOf(NetworkPreference.ANY) }
     var requiresCharging by remember { mutableStateOf(false) }
     var homeWifiSsids by remember { mutableStateOf<List<String>>(emptyList()) }
+    var storageWarningGb by remember { mutableStateOf(5) }
     var excludedPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showFolderPicker by remember { mutableStateOf(false) }
     var prefilled by remember { mutableStateOf(false) }
@@ -115,6 +116,7 @@ fun ProfileWizardScreen(
                 requiresCharging = p.requiresCharging
                 homeWifiSsids = com.routersync.app.work.NetworkConditionChecker.homeSsidList(p.homeWifiSsid)
                 excludedPaths = com.routersync.app.sync.excludedPathSet(p.excludedPaths)
+                storageWarningGb = p.storageWarningThresholdGb
                 prefilled = true
             }
         }
@@ -170,6 +172,7 @@ fun ProfileWizardScreen(
                         scheduleType = scheduleType, onScheduleChange = { scheduleType = it },
                         direction = direction, onDirectionChange = { direction = it },
                         autoFreeSpace = autoFreeSpace, onAutoFreeSpaceChange = { autoFreeSpace = it },
+                        storageWarningGb = storageWarningGb, onStorageWarningGbChange = { storageWarningGb = it },
                         mirrorDeletes = mirrorDeletes, onMirrorDeletesChange = { mirrorDeletes = it },
                         scheduledHour = scheduledHour, scheduledMinute = scheduledMinute,
                         onTimeChange = { h, m -> scheduledHour = h; scheduledMinute = m },
@@ -218,7 +221,8 @@ fun ProfileWizardScreen(
                                     scheduledDayOfWeek = scheduledDayOfWeek, scheduledDayOfMonth = scheduledDayOfMonth,
                                     networkPreference = networkPreference, requiresCharging = requiresCharging,
                                     homeWifiSsid = com.routersync.app.work.NetworkConditionChecker.joinHomeSsidList(homeWifiSsids),
-                                    excludedPaths = com.routersync.app.sync.joinExcludedPathSet(excludedPaths)
+                                    excludedPaths = com.routersync.app.sync.joinExcludedPathSet(excludedPaths),
+                                    storageWarningThresholdGb = storageWarningGb
                                 )
                             )
                             onDone()
@@ -429,6 +433,7 @@ private fun StepSchedule(
     scheduleType: ScheduleType, onScheduleChange: (ScheduleType) -> Unit,
     direction: SyncDirection, onDirectionChange: (SyncDirection) -> Unit,
     autoFreeSpace: Boolean, onAutoFreeSpaceChange: (Boolean) -> Unit,
+    storageWarningGb: Int, onStorageWarningGbChange: (Int) -> Unit,
     mirrorDeletes: Boolean, onMirrorDeletesChange: (Boolean) -> Unit,
     scheduledHour: Int, scheduledMinute: Int, onTimeChange: (Int, Int) -> Unit,
     scheduledDayOfWeek: Int, onDayOfWeekChange: (Int) -> Unit,
@@ -748,6 +753,16 @@ private fun StepSchedule(
             }
             Switch(checked = autoFreeSpace, onCheckedChange = onAutoFreeSpaceChange)
         }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = storageWarningGb.toString(),
+            onValueChange = { it.toIntOrNull()?.let { gb -> if (gb > 0) onStorageWarningGbChange(gb) } },
+            label = { Text("Avvisa se lo spazio libero sull'HDD scende sotto (GB)") },
+            supportingText = { Text("Specifico per questo HDD: capacità diverse richiedono soglie diverse") },
+            singleLine = true,
+            modifier = Modifier.width(260.dp)
+        )
     }
 
     // Propagazione cancellazioni: ha senso solo per la sincronizzazione bidirezionale
