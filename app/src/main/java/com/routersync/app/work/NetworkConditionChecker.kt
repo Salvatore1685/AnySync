@@ -46,16 +46,25 @@ object NetworkConditionChecker {
             NetworkPreference.ANY -> true
             NetworkPreference.WIFI_ONLY -> isOnAnyWifi(context)
             NetworkPreference.HOME_WIFI_ONLY -> {
-                val home = profile.homeWifiSsid
-                home != null && currentWifiSsid(context) == home
+                val homes = homeSsidList(profile.homeWifiSsid)
+                val current = currentWifiSsid(context)
+                homes.isNotEmpty() && current != null && homes.contains(current)
             }
             NetworkPreference.MOBILE_ONLY -> isOnMobileData(context)
             NetworkPreference.HOME_WIFI_OR_MOBILE -> {
-                val home = profile.homeWifiSsid
-                (home != null && currentWifiSsid(context) == home) || isOnMobileData(context)
+                val homes = homeSsidList(profile.homeWifiSsid)
+                val current = currentWifiSsid(context)
+                (homes.isNotEmpty() && current != null && homes.contains(current)) || isOnMobileData(context)
             }
         }
     }
+
+    /** Le reti "di casa" sono salvate come elenco separato da "\n" in un unico campo testo. */
+    fun homeSsidList(stored: String?): List<String> =
+        stored?.split("\n")?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
+
+    fun joinHomeSsidList(list: List<String>): String? =
+        list.filter { it.isNotBlank() }.distinct().joinToString("\n").ifBlank { null }
 
     /**
      * Descrive in modo leggibile perché la condizione di rete non è soddisfatta in questo
@@ -63,23 +72,25 @@ object NetworkConditionChecker {
      */
     fun reasonNotSatisfied(context: Context, profile: SyncProfile): String {
         val current = currentWifiSsid(context)
+        val homes = homeSsidList(profile.homeWifiSsid)
+        val homesLabel = homes.joinToString(" / ") { "\"$it\"" }
         return when (profile.networkPreference) {
             NetworkPreference.ANY -> "" // non dovrebbe mai capitare: ANY è sempre soddisfatta
             NetworkPreference.WIFI_ONLY -> "in attesa di una connessione Wi-Fi (al momento non rilevata)"
             NetworkPreference.HOME_WIFI_ONLY -> when {
-                profile.homeWifiSsid == null ->
-                    "nessun Wi-Fi di casa impostato per questa sync — modificala e rileva il Wi-Fi di casa mentre sei connesso ad esso"
+                homes.isEmpty() ->
+                    "nessuna rete Wi-Fi di casa impostata per questa sync — modificala e aggiungine almeno una"
                 current == null ->
-                    "in attesa del Wi-Fi di casa \"${profile.homeWifiSsid}\" (al momento non sei connesso a nessun Wi-Fi)"
+                    "in attesa di una delle reti Wi-Fi di casa ($homesLabel) — al momento non sei connesso a nessun Wi-Fi"
                 else ->
-                    "in attesa del Wi-Fi di casa \"${profile.homeWifiSsid}\" (sei connesso a \"$current\")"
+                    "in attesa di una delle reti Wi-Fi di casa ($homesLabel) — sei connesso a \"$current\""
             }
             NetworkPreference.MOBILE_ONLY -> "in attesa dei dati mobili (richiede anche un IP pubblico funzionante sulla linea di casa)"
             NetworkPreference.HOME_WIFI_OR_MOBILE -> when {
-                profile.homeWifiSsid == null ->
-                    "nessun Wi-Fi di casa impostato, e non sei sui dati mobili — modifica la sync per impostarlo"
+                homes.isEmpty() ->
+                    "nessuna rete Wi-Fi di casa impostata, e non sei sui dati mobili — modifica la sync per aggiungerne una"
                 else ->
-                    "in attesa del Wi-Fi di casa \"${profile.homeWifiSsid}\" o dei dati mobili (sei connesso a \"${current ?: "nessuna rete Wi-Fi"}\")"
+                    "in attesa di una rete Wi-Fi di casa ($homesLabel) o dei dati mobili (sei connesso a \"${current ?: "nessuna rete Wi-Fi"}\")"
             }
         }
     }

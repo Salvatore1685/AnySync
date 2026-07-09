@@ -283,10 +283,15 @@ private fun ProfileCard(
     val context = LocalContext.current
     var showFreeSpaceConfirm by remember { mutableStateOf(false) }
     val workManager = remember { WorkManager.getInstance(context) }
-    val workInfos by workManager
+    val manualWorkInfos by workManager
         .getWorkInfosForUniqueWorkFlow("sync_profile_${profile.id}_manual")
         .collectAsState(initial = emptyList())
-    val isSyncing = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+    val scheduledWorkInfos by workManager
+        .getWorkInfosForUniqueWorkFlow("sync_profile_${profile.id}")
+        .collectAsState(initial = emptyList())
+    // Solo RUNNING conta come "in corso": ENQUEUED per una sync pianificata può restare tale
+    // per ore (in attesa del prossimo orario), e non deve mostrare l'animazione di caricamento.
+    val isSyncing = (manualWorkInfos + scheduledWorkInfos).any { it.state == WorkInfo.State.RUNNING }
     val success = successColor()
     val errorColor = errorSemanticColor()
 

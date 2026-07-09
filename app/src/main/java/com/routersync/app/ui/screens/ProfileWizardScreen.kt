@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -71,7 +72,7 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
     var scheduledDayOfMonth by remember { mutableStateOf(1) }
     var networkPreference by remember { mutableStateOf(NetworkPreference.ANY) }
     var requiresCharging by remember { mutableStateOf(false) }
-    var homeWifiSsid by remember { mutableStateOf<String?>(null) }
+    var homeWifiSsids by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -128,7 +129,7 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
                         scheduledDayOfMonth = scheduledDayOfMonth, onDayOfMonthChange = { scheduledDayOfMonth = it },
                         networkPreference = networkPreference, onNetworkPreferenceChange = { networkPreference = it },
                         requiresCharging = requiresCharging, onRequiresChargingChange = { requiresCharging = it },
-                        homeWifiSsid = homeWifiSsid, onHomeWifiSsidChange = { homeWifiSsid = it }
+                        homeWifiSsids = homeWifiSsids, onHomeWifiSsidsChange = { homeWifiSsids = it }
                     )
                 }
             }
@@ -167,7 +168,7 @@ fun ProfileWizardScreen(onDone: () -> Unit, viewModel: SyncViewModel = viewModel
                                     scheduledHour = scheduledHour, scheduledMinute = scheduledMinute,
                                     scheduledDayOfWeek = scheduledDayOfWeek, scheduledDayOfMonth = scheduledDayOfMonth,
                                     networkPreference = networkPreference, requiresCharging = requiresCharging,
-                                    homeWifiSsid = homeWifiSsid
+                                    homeWifiSsid = com.routersync.app.work.NetworkConditionChecker.joinHomeSsidList(homeWifiSsids)
                                 )
                             )
                             onDone()
@@ -364,7 +365,7 @@ private fun StepSchedule(
     networkPreference: NetworkPreference,
     onNetworkPreferenceChange: (NetworkPreference) -> Unit,
     requiresCharging: Boolean, onRequiresChargingChange: (Boolean) -> Unit,
-    homeWifiSsid: String?, onHomeWifiSsidChange: (String?) -> Unit
+    homeWifiSsids: List<String>, onHomeWifiSsidsChange: (List<String>) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -520,19 +521,86 @@ private fun StepSchedule(
                     val detectedSsid = remember(permissionGranted, systemLocationEnabled) {
                         com.routersync.app.work.NetworkConditionChecker.currentWifiSsid(context)
                     }
-                    if (homeWifiSsid != null) {
-                        Text("Wi-Fi di casa: $homeWifiSsid", style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
-                        TextButton(onClick = { onHomeWifiSsidChange(null) }) { Text("Cambia") }
-                    } else if (detectedSsid != null) {
-                        OutlinedButton(onClick = { onHomeWifiSsidChange(detectedSsid) }) {
-                            Text("Usa \"$detectedSsid\" come Wi-Fi di casa")
+                    var manualSsidInput by remember { mutableStateOf("") }
+
+                    // Card ben visibile con le reti già aggiunte, per non perderla di vista
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "Reti Wi-Fi di casa impostate",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            if (homeWifiSsids.isEmpty()) {
+                                Text(
+                                    "Nessuna ancora — aggiungine almeno una qui sotto",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            } else {
+                                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    homeWifiSsids.forEach { ssid ->
+                                        InputChip(
+                                            selected = true,
+                                            onClick = {},
+                                            label = { Text(ssid) },
+                                            trailingIcon = {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "Rimuovi",
+                                                    modifier = Modifier.size(16.dp).clickableSelect {
+                                                        onHomeWifiSsidsChange(homeWifiSsids - ssid)
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
-                    } else {
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Rileva e aggiungi la rete a cui sei connesso ora
+                    if (detectedSsid != null && detectedSsid !in homeWifiSsids) {
+                        OutlinedButton(
+                            onClick = { onHomeWifiSsidsChange(homeWifiSsids + detectedSsid) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Aggiungi \"$detectedSsid\" (rete attuale)")
+                        }
+                    } else if (detectedSsid == null) {
                         Text(
-                            "Per rilevare il Wi-Fi di casa, apri questo wizard mentre sei connesso alla rete Wi-Fi di casa.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
+                            "Per rilevare la rete a cui sei connesso ora, apri questo wizard mentre sei collegato ad essa.",
+                            style = MaterialTheme.typography.bodySmall
                         )
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    Text("Oppure aggiungi il nome di una rete manualmente", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = manualSsidInput,
+                            onValueChange = { manualSsidInput = it },
+                            label = { Text("Nome rete (SSID)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = {
+                            val name = manualSsidInput.trim()
+                            if (name.isNotBlank() && name !in homeWifiSsids) {
+                                onHomeWifiSsidsChange(homeWifiSsids + name)
+                            }
+                            manualSsidInput = ""
+                        }) { Text("Aggiungi") }
                     }
                 }
             }
