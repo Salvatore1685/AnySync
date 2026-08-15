@@ -12,6 +12,10 @@ interface SyncProfileDao {
     @Query("SELECT * FROM sync_profiles WHERE id = :id")
     suspend fun getById(id: Long): SyncProfile?
 
+    /** Lettura una tantum di tutti i profili (non un Flow), usata per l'esportazione di backup. */
+    @Query("SELECT * FROM sync_profiles ORDER BY id DESC")
+    suspend fun getAllOnce(): List<SyncProfile>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(profile: SyncProfile): Long
 
