@@ -6,6 +6,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -15,6 +20,9 @@ import com.routersync.app.ui.screens.HddGalleryScreen
 import com.routersync.app.ui.screens.ProfileWizardScreen
 import com.routersync.app.ui.screens.SettingsScreen
 import com.routersync.app.ui.theme.RouterSyncTheme
+
+/** Durata/curva unica per tutte le transizioni tra schermate, per coerenza in tutta l'app. */
+private const val TRANSITION_MS = 260
 
 class MainActivity : ComponentActivity() {
 
@@ -36,7 +44,29 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val navController = rememberNavController()
-                NavHost(navController = navController, startDestination = "dashboard") {
+                NavHost(
+                    navController = navController,
+                    startDestination = "dashboard",
+                    // Transizione "avanti": la nuova schermata scorre da destra e sfuma in entrata,
+                    // quella precedente scorre leggermente a sinistra e sfuma in uscita.
+                    enterTransition = {
+                        slideInHorizontally(animationSpec = tween(TRANSITION_MS), initialOffsetX = { it / 4 }) +
+                            fadeIn(animationSpec = tween(TRANSITION_MS))
+                    },
+                    exitTransition = {
+                        slideOutHorizontally(animationSpec = tween(TRANSITION_MS), targetOffsetX = { -it / 8 }) +
+                            fadeOut(animationSpec = tween(TRANSITION_MS))
+                    },
+                    // Transizione "indietro" (tasto back o popBackStack): l'esatto contrario.
+                    popEnterTransition = {
+                        slideInHorizontally(animationSpec = tween(TRANSITION_MS), initialOffsetX = { -it / 8 }) +
+                            fadeIn(animationSpec = tween(TRANSITION_MS))
+                    },
+                    popExitTransition = {
+                        slideOutHorizontally(animationSpec = tween(TRANSITION_MS), targetOffsetX = { it / 4 }) +
+                            fadeOut(animationSpec = tween(TRANSITION_MS))
+                    }
+                ) {
                     composable("dashboard") {
                         DashboardScreen(
                             onAddProfile = { navController.navigate("wizard") },

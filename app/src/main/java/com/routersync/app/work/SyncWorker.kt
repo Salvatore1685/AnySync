@@ -52,6 +52,7 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
 
         setForeground(createForegroundInfo("Avvio sincronizzazione…"))
 
+        val syncStartTime = System.currentTimeMillis()
         val engine = SyncEngine(applicationContext)
         val result = engine.run(
             profile = profile,
@@ -59,7 +60,7 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
                 // Aggiorna la notifica con il progresso (best-effort, non blocca in caso di errore)
                 runCatching {
                     val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    nm.notify(NOTIFICATION_ID, buildNotification("Sincronizzo: $current", done, total))
+                    nm.notify(NOTIFICATION_ID, buildNotification(progressText(current, done, total, syncStartTime), done, total))
                 }
             },
             isCancelled = { isStopped }
@@ -127,6 +128,31 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             .setOngoing(true)
             .apply { if (total > 0) setProgress(total, done, false) }
             .build()
+
+    /** Testo della notifica con nome file, percentuale e tempo stimato rimanente (basato sulla velocità media finora). */
+    private fun progressText(current: String, done: Int, total: Int, startTime: Long): String {
+        if (total <= 0) return "Sincronizzo: $current"
+        val percent = ((done * 100) / total).coerceIn(0, 100)
+        val elapsedMs = System.currentTimeMillis() - startTime
+        val eta = if (done > 0 && elapsedMs > 1000) {
+            val msPerFile = elapsedMs.toDouble() / done
+            formatDuration((msPerFile * (total - done)).toLong())
+        } else null
+        return buildString {
+            append("$current ($done/$total · $percent%)")
+            if (eta != null) append(" · ~$eta rimanenti")
+        }
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val totalSeconds = ms / 1000
+        return when {
+            totalSeconds < 5 -> "pochi secondi"
+            totalSeconds < 60 -> "${totalSeconds}s"
+            totalSeconds < 3600 -> "${totalSeconds / 60} min"
+            else -> "${totalSeconds / 3600}h ${(totalSeconds % 3600) / 60}min"
+        }
+    }
 
     /** Controlla lo spazio libero sull'HDD di questa sync e, se sotto soglia, invia una notifica dedicata. */
     private fun checkLowSpaceAndNotify(profile: com.routersync.app.data.SyncProfile) {

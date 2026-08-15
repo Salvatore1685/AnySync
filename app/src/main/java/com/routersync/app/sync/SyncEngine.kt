@@ -27,6 +27,15 @@ data class FreeSpaceResult(val success: Boolean, val message: String, val filesD
 typealias ProgressCallback = (current: String, done: Int, total: Int) -> Unit
 
 /**
+ * Tiene il conteggio di quanti elementi sono stati processati sul totale stimato all'inizio
+ * della sincronizzazione, condiviso tra le sue varie fasi (upload/download), per poter mostrare
+ * un avanzamento reale nella notifica invece di un generico "in corso" senza percentuale.
+ */
+class ProgressTracker(val total: Int) {
+    var done: Int = 0
+}
+
+/**
  * Motore di sincronizzazione. Tutto il contenuto viene replicato, struttura originale
  * inclusa, dentro un'unica cartella "All" sull'HDD (nessuna duplicazione fisica per
  * categoria: i filtri per tipo vengono calcolati al volo dall'interfaccia di navigazione).
@@ -64,6 +73,22 @@ class SyncEngine(private val context: Context) {
             var updatedManifest: String? = null
             val excluded = excludedPathSet(profile.excludedPaths)
 
+            // Conta in anticipo quanti elementi ci sono da processare, per poter mostrare un
+            // avanzamento reale (percentuale, tempo stimato) invece di un generico "in corso".
+            // È solo una stima: nel caso bidirezionale con cancellazioni conta entrambi i lati
+            // per eccesso invece di calcolarne l'unione esatta, ma per una barra di progresso va
+            // bene così — non deve essere millimetrica.
+            val tracker = ProgressTracker(
+                total = if (profile.direction == SyncDirection.BIDIRECTIONAL && profile.mirrorDeletes) {
+                    countLocalFiles(localRoot, excluded) + countRemoteFiles(client, allPath)
+                } else {
+                    var t = 0
+                    if (profile.direction == SyncDirection.UPLOAD_ONLY || profile.direction == SyncDirection.BIDIRECTIONAL) t += countLocalFiles(localRoot, excluded)
+                    if (profile.direction == SyncDirection.DOWNLOAD_ONLY || profile.direction == SyncDirection.BIDIRECTIONAL) t += countRemoteFiles(client, allPath)
+                    t
+                }
+            )
+
             if (profile.direction == SyncDirection.BIDIRECTIONAL && profile.mirrorDeletes) {
                 // Merge a tre vie con propagazione delle cancellazioni, basato sul registro precedente
                 val previousManifest = profile.lastSyncManifest
@@ -71,7 +96,7 @@ class SyncEngine(private val context: Context) {
                 val newManifest = mutableSetOf<String>()
                 val (count, cancelled) = mirrorBidirectionalWithDeletes(
                     client, localRoot, allPath, "", previousManifest,
-                    profile.autoFreeSpaceAfterSync, excluded, onProgress, isCancelled, newManifest
+                    profile.autoFreeSpaceAfterSync, excluded, onProgress, isCancelled, newManifest, tracker
                 )
                 transferred += count
                 wasCancelled = cancelled
@@ -90,7 +115,7 @@ class SyncEngine(private val context: Context) {
                     val remoteHashIndex = buildRemoteHashIndex(client, hashDao, profile.id, allPath)
                     val (count, cancelled) = mirrorUpload(
                         client, localRoot, allPath, profile.direction, profile.autoFreeSpaceAfterSync,
-                        excluded, "", onProgress, isCancelled, hashDao, profile.id, remoteHashIndex
+                        excluded, "", onProgress, isCancelled, hashDao, profile.id, remoteHashIndex, tracker
                     )
                     transferred += count
                     wasCancelled = wasCancelled || cancelled
@@ -104,7 +129,7 @@ class SyncEngine(private val context: Context) {
                     }
                 }
                 if (!wasCancelled && (profile.direction == SyncDirection.DOWNLOAD_ONLY || profile.direction == SyncDirection.BIDIRECTIONAL)) {
-                    val (count, cancelled) = mirrorDownload(client, allPath, localRoot, profile.direction, onProgress, isCancelled)
+                    val (count, cancelled) = mirrorDownload(client, allPath, localRoot, profile.direction, onProgress, isCancelled, tracker)
                     transferred += count
                     wasCancelled = wasCancelled || cancelled
                 }
@@ -246,6 +271,29 @@ class SyncEngine(private val context: Context) {
         return names
     }
 
+    /** Conta ricorsivamente i file locali (non le cartelle) che sarebbero coinvolti dalla sync, rispettando le esclusioni — usato solo per stimare il totale da mostrare in progress bar. */
+    private fun countLocalFiles(dir: DocumentFile, excluded: Set<String>, relativePath: String = ""): Int {
+        var count = 0
+        for (child in dir.listFiles()) {
+            val name = child.name ?: continue
+            val childRelativePath = if (relativePath.isBlank()) name else "$relativePath/$name"
+            if (isPathExcluded(childRelativePath, excluded)) continue
+            count += if (child.isDirectory) countLocalFiles(child, excluded, childRelativePath) else 1
+        }
+        return count
+    }
+
+    /** Conta ricorsivamente i file remoti (non le cartelle, escluso il file indice) — usato solo per stimare il totale da mostrare in progress bar. */
+    private fun countRemoteFiles(client: RemoteClient, path: String): Int {
+        if (!client.exists(path)) return 0
+        var count = 0
+        for (entry in client.listFiles(path)) {
+            if (RemoteHashIndexFile.isIndexFileName(entry.name)) continue
+            count += if (entry.isDirectory) countRemoteFiles(client, entry.path) else 1
+        }
+        return count
+    }
+
     /** Replica ricorsivamente [localDir] dentro [remotePath] (solo aggiunte/aggiornamenti, mai cancellazioni). */
     private fun mirrorUpload(
         client: RemoteClient,
@@ -259,7 +307,8 @@ class SyncEngine(private val context: Context) {
         isCancelled: () -> Boolean,
         hashDao: RemoteFileHashDao,
         profileId: Long,
-        remoteHashIndex: MutableMap<String, RemoteEntry>
+        remoteHashIndex: MutableMap<String, RemoteEntry>,
+        tracker: ProgressTracker
     ): Pair<Int, Boolean> {
         var transferred = 0
         if (!client.exists(remotePath)) client.mkdirs(remotePath)
@@ -275,12 +324,13 @@ class SyncEngine(private val context: Context) {
             if (child.isDirectory) {
                 val (count, cancelled) = mirrorUpload(
                     client, child, joinPath(remotePath, name), direction, autoFreeSpace, excluded,
-                    childRelativePath, onProgress, isCancelled, hashDao, profileId, remoteHashIndex
+                    childRelativePath, onProgress, isCancelled, hashDao, profileId, remoteHashIndex, tracker
                 )
                 transferred += count
                 if (cancelled) return transferred to true
             } else {
-                onProgress?.invoke(name, 0, 0)
+                tracker.done++
+                onProgress?.invoke(name, tracker.done, tracker.total)
                 val remoteChild = remoteChildren[name]
                 when {
                     remoteChild == null -> {
@@ -427,7 +477,8 @@ class SyncEngine(private val context: Context) {
         localDir: DocumentFile,
         direction: SyncDirection,
         onProgress: ProgressCallback?,
-        isCancelled: () -> Boolean
+        isCancelled: () -> Boolean,
+        tracker: ProgressTracker
     ): Pair<Int, Boolean> {
         var transferred = 0
         val remoteChildren = client.listFiles(remotePath)
@@ -439,11 +490,12 @@ class SyncEngine(private val context: Context) {
                 val localSubDir = localByName[remote.name] as? DocumentFile
                     ?: localDir.createDirectory(remote.name)
                     ?: continue
-                val (count, cancelled) = mirrorDownload(client, remote.path, localSubDir, direction, onProgress, isCancelled)
+                val (count, cancelled) = mirrorDownload(client, remote.path, localSubDir, direction, onProgress, isCancelled, tracker)
                 transferred += count
                 if (cancelled) return transferred to true
             } else {
-                onProgress?.invoke(remote.name, 0, 0)
+                tracker.done++
+                onProgress?.invoke(remote.name, tracker.done, tracker.total)
                 val local = localByName[remote.name]
                 val shouldDownload = local == null ||
                     (direction == SyncDirection.BIDIRECTIONAL && remote.lastModified > local.lastModified())
@@ -478,7 +530,8 @@ class SyncEngine(private val context: Context) {
         excluded: Set<String>,
         onProgress: ProgressCallback?,
         isCancelled: () -> Boolean,
-        newManifest: MutableSet<String>
+        newManifest: MutableSet<String>,
+        tracker: ProgressTracker
     ): Pair<Int, Boolean> {
         var transferred = 0
         if (!client.exists(remotePath)) client.mkdirs(remotePath)
@@ -513,13 +566,14 @@ class SyncEngine(private val context: Context) {
                 val subLocalDir = (localChild as? DocumentFile) ?: localDir.createDirectory(name) ?: continue
                 val (count, cancelled) = mirrorBidirectionalWithDeletes(
                     client, subLocalDir, joinPath(remotePath, name), relPath,
-                    previousManifest, autoFreeSpace, excluded, onProgress, isCancelled, newManifest
+                    previousManifest, autoFreeSpace, excluded, onProgress, isCancelled, newManifest, tracker
                 )
                 transferred += count
                 newManifest += relPath
                 if (cancelled) return transferred to true
             } else {
-                onProgress?.invoke(name, 0, 0)
+                tracker.done++
+                onProgress?.invoke(name, tracker.done, tracker.total)
                 when {
                     localChild != null && remoteChild != null -> {
                         if (localChild.lastModified() > remoteChild.lastModified) {
