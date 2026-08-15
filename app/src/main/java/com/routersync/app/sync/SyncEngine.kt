@@ -3,6 +3,7 @@ package com.routersync.app.sync
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import androidx.exifinterface.media.ExifInterface
 import com.routersync.app.data.AppDatabase
 import com.routersync.app.data.RemoteFileHashDao
 import com.routersync.app.data.RemoteFileHashEntity
@@ -121,10 +122,13 @@ class SyncEngine(private val context: Context) {
                     wasCancelled = wasCancelled || cancelled
                     if (!cancelled) {
                         // Riporta l'indice aggiornato sull'HDD, così resta disponibile anche se
-                        // in futuro cambi telefono o reinstalli l'app.
+                        // in futuro cambi telefono o reinstalli l'app. Lo leggiamo dalla cache
+                        // (non dalla sola mappa in memoria) per includere anche la data di scatto.
                         RemoteHashIndexFile.write(
                             client, allPath,
-                            remoteHashIndex.map { (hash, entry) -> RemoteHashIndexFile.Entry(entry.path, entry.size, entry.lastModified, hash) }
+                            hashDao.getAllForProfile(profile.id).map {
+                                RemoteHashIndexFile.Entry(it.remotePath, it.size, it.lastModified, it.sha256, it.contentDate)
+                            }
                         )
                     }
                 }
@@ -144,6 +148,33 @@ class SyncEngine(private val context: Context) {
             return SyncResult(false, "Errore: ${e.message}", transferred)
         } finally {
             client.disconnect()
+        }
+    }
+
+    /**
+     * Cancella la cache degli hash/date di scatto per questo profilo, sia quella locale
+     * (database dell'app) sia quella salvata sull'HDD (file indice). La sync successiva dovrà
+     * quindi ricalcolare da zero l'hash — e ricontrollare i duplicati — di ogni file già
+     * presente nella cartella di destinazione: utile se si sospetta che la cache sia
+     * incoerente, o per far ricalcolare le date di scatto dopo un cambiamento importante.
+     * Non tocca né cancella alcun file vero (foto, video, documenti): solo la cache di supporto.
+     */
+    fun clearHashCache(profile: SyncProfile): SyncResult {
+        val client = RemoteClientFactory.create(profile)
+        return try {
+            val hashDao = AppDatabase.getInstance(context).remoteFileHashDao()
+            hashDao.deleteForProfile(profile.id)
+
+            client.connect()
+            val allPath = joinPath(remoteRelativeRoot(profile), sanitizeFolderName(profile.name))
+            val indexPath = if (allPath.isBlank()) RemoteHashIndexFile.FILE_NAME else "$allPath/${RemoteHashIndexFile.FILE_NAME}"
+            if (client.exists(indexPath)) client.delete(indexPath)
+
+            SyncResult(true, "Cache cancellata: la prossima sync ricontrollerà tutto da zero", 0)
+        } catch (e: Exception) {
+            SyncResult(false, "Errore durante la cancellazione della cache: ${e.message}", 0)
+        } finally {
+            runCatching { client.disconnect() }
         }
     }
 
@@ -339,9 +370,13 @@ class SyncEngine(private val context: Context) {
                         // destinazione (nome o sottocartella diversi) — es. lo stesso file
                         // caricato in passato da un altro telefono. In tal caso non lo ricarichiamo.
                         val localHash = hashLocalFile(child)
+                        val contentDate = captureDateMillis(child)
                         val existingDuplicate = localHash?.let { remoteHashIndex[it] }
                         if (existingDuplicate != null) {
                             if (autoFreeSpace) child.delete()
+                            // Anche se non lo ricarichiamo, approfittiamone per attaccare la data
+                            // di scatto alla copia già presente sull'HDD, se non la conosciamo ancora.
+                            if (contentDate != null) hashDao.setContentDateIfMissing(profileId, existingDuplicate.path, contentDate)
                         } else {
                             val uploadPath = joinPath(remotePath, name)
                             context.contentResolver.openInputStream(child.uri)?.use { input ->
@@ -349,7 +384,7 @@ class SyncEngine(private val context: Context) {
                             }
                             transferred++
                             if (autoFreeSpace) child.delete()
-                            recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified())
+                            recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified(), contentDate)
                         }
                     }
                     remoteChild.size != child.length() -> {
@@ -359,22 +394,37 @@ class SyncEngine(private val context: Context) {
                         val uniqueName = uniqueSuffixedName(name, remoteChildren.keys)
                         val uploadPath = joinPath(remotePath, uniqueName)
                         val localHash = hashLocalFile(child)
+                        val contentDate = captureDateMillis(child)
                         context.contentResolver.openInputStream(child.uri)?.use { input ->
                             client.upload(uploadPath, input, child.length())
                         }
                         transferred++
                         if (autoFreeSpace) child.delete()
-                        recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, uniqueName, uploadPath, child.length(), child.lastModified())
+                        recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, uniqueName, uploadPath, child.length(), child.lastModified(), contentDate)
                     }
                     direction == SyncDirection.BIDIRECTIONAL && child.lastModified() > remoteChild.lastModified -> {
                         val uploadPath = joinPath(remotePath, name)
                         val localHash = hashLocalFile(child)
+                        val contentDate = captureDateMillis(child)
                         context.contentResolver.openInputStream(child.uri)?.use { input ->
                             client.upload(uploadPath, input, child.length())
                         }
                         transferred++
                         if (autoFreeSpace) child.delete()
-                        recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified())
+                        recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified(), contentDate)
+                    }
+                    else -> {
+                        // File già presente con lo stesso nome e la stessa dimensione: nessuna
+                        // azione di sync serve. Ma se la sua data di scatto non è ancora nota
+                        // (es. subito dopo "Ricontrolla tutti i file da zero"), il file originale
+                        // è comunque ancora qui sul telefono: ne approfittiamo per recuperarla,
+                        // invece di lasciarla persa per sempre. Controlliamo prima la cache (una
+                        // query locale economica) per non rileggere l'EXIF di ogni file a ogni
+                        // sync quando la data è già nota da tempo.
+                        if (hashDao.find(profileId, remoteChild.path)?.contentDate == null) {
+                            val contentDate = captureDateMillis(child)
+                            if (contentDate != null) hashDao.setContentDateIfMissing(profileId, remoteChild.path, contentDate)
+                        }
                     }
                 }
                 if (isCancelled()) return transferred to true
@@ -387,6 +437,35 @@ class SyncEngine(private val context: Context) {
     private fun hashLocalFile(file: DocumentFile): String? =
         FileHasher.sha256(context.contentResolver.openInputStream(file.uri))
 
+    /**
+     * Ricava la vera data di scatto/creazione di un file, da usare per ordinarlo
+     * cronologicamente — non la data in cui viene caricato sull'HDD, che altrimenti
+     * rifletterebbe solo l'ordine di sincronizzazione e non uno storico lineare.
+     * Per le immagini prova prima l'EXIF (data di scatto della fotocamera); se assente o il
+     * file non è un'immagine, usa la data di ultima modifica del file sul telefono, che è
+     * comunque più affidabile della data di upload sull'HDD.
+     */
+    private fun captureDateMillis(file: DocumentFile): Long? {
+        val name = file.name ?: return file.lastModified()
+        if (isImageFile(name)) {
+            val exifDate = runCatching {
+                context.contentResolver.openInputStream(file.uri)?.use { input ->
+                    val exif = ExifInterface(input)
+                    val raw = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                        ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+                    raw?.let { java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US).parse(it)?.time }
+                }
+            }.getOrNull()
+            if (exifDate != null) return exifDate
+        }
+        return file.lastModified().takeIf { it > 0 }
+    }
+
+    private fun isImageFile(name: String): Boolean {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return ext in setOf("jpg", "jpeg", "heic", "heif", "png", "webp", "dng")
+    }
+
     /** Dopo un upload, aggiorna sia l'indice in memoria (per il resto di questa sincronizzazione) sia la cache su DB (per le prossime). */
     private fun recordUploadedHash(
         hashDao: RemoteFileHashDao,
@@ -396,11 +475,12 @@ class SyncEngine(private val context: Context) {
         name: String,
         remotePath: String,
         size: Long,
-        lastModified: Long
+        lastModified: Long,
+        contentDate: Long?
     ) {
         if (localHash == null) return
         remoteHashIndex[localHash] = RemoteEntry(name, remotePath, false, lastModified, size)
-        hashDao.upsert(RemoteFileHashEntity(profileId, remotePath, size, lastModified, localHash))
+        hashDao.upsert(RemoteFileHashEntity(profileId, remotePath, size, lastModified, localHash, contentDate))
     }
 
     /**
@@ -432,7 +512,7 @@ class SyncEngine(private val context: Context) {
         val entries = RemoteHashIndexFile.read(client, basePath)
         for (entry in entries) {
             if (hashDao.find(profileId, entry.path) == null) {
-                hashDao.upsert(RemoteFileHashEntity(profileId, entry.path, entry.size, entry.lastModified, entry.sha256))
+                hashDao.upsert(RemoteFileHashEntity(profileId, entry.path, entry.size, entry.lastModified, entry.sha256, entry.contentDate))
             }
         }
     }

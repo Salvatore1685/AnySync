@@ -21,4 +21,12 @@ interface RemoteFileHashDao {
 
     @Query("DELETE FROM remote_file_hashes WHERE profileId = :profileId")
     fun deleteForProfile(profileId: Long)
+
+    /** Tutte le voci in cache per un profilo (usato per riscrivere l'indice completo sull'HDD, data di scatto inclusa). */
+    @Query("SELECT * FROM remote_file_hashes WHERE profileId = :profileId")
+    fun getAllForProfile(profileId: Long): List<RemoteFileHashEntity>
+
+    /** Imposta la data di scatto solo se non è già nota, per non perdere un valore migliore già calcolato. */
+    @Query("UPDATE remote_file_hashes SET contentDate = :contentDate WHERE profileId = :profileId AND remotePath = :remotePath AND contentDate IS NULL")
+    fun setContentDateIfMissing(profileId: Long, remotePath: String, contentDate: Long)
 }

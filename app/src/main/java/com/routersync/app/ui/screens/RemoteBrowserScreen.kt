@@ -95,7 +95,10 @@ fun RemoteBrowserContent(
     mode: BrowserMode,
     title: String = "Sfoglia HDD",
     onPickPath: ((String) -> Unit)? = null,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    /** Se presente, l'ordinamento usa la data di scatto/creazione originale salvata per questo
+     * profilo (invece della sola data di caricamento sull'HDD), quando disponibile. */
+    profileId: Long? = null
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -112,6 +115,26 @@ fun RemoteBrowserContent(
     var downloadingBusy by remember { mutableStateOf(false) }
     var pendingDownloadSingle by remember { mutableStateOf<RemoteEntry?>(null) }
     var pendingDownloadMultiple by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
+
+    // Date di scatto/creazione originali note per questo profilo (path remoto -> data), lette
+    // dalla cache locale: quando presenti, prevalgono sulla data di caricamento sull'HDD per
+    // dare un ordine cronologico vero invece che "per data di upload".
+    var contentDates by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    LaunchedEffect(profileId) {
+        if (profileId != null) {
+            withContext(Dispatchers.IO) {
+                contentDates = runCatching {
+                    com.routersync.app.data.AppDatabase.getInstance(context).remoteFileHashDao()
+                        .getAllForProfile(profileId)
+                        .mapNotNull { row -> row.contentDate?.let { row.remotePath to it } }
+                        .toMap()
+                }.getOrDefault(emptyMap())
+            }
+        }
+    }
+    /** Data da usare per ordinare: quella di scatto salvata se la conosciamo, altrimenti quella (di upload) restituita dall'HDD. */
+    fun sortDateOf(entry: RemoteEntry): Long = contentDates[entry.path] ?: entry.lastModified
+
 
     // Selettore di sistema "Salva con nome": per scaricare un singolo file dove preferisce l'utente
     val createDocumentLauncher = rememberLauncherForActivityResult(
@@ -222,7 +245,7 @@ fun RemoteBrowserContent(
         }
     }
 
-    LaunchedEffect(currentPath, connected, reloadTrigger) {
+    LaunchedEffect(currentPath, connected, reloadTrigger, contentDates) {
         if (!connected) return@LaunchedEffect
         loading = true
         loadError = null
@@ -232,10 +255,11 @@ fun RemoteBrowserContent(
                     .sortedWith(
                         compareByDescending<RemoteEntry> { it.isDirectory }
                             // Cartelle in ordine alfabetico, file dal più recente al più vecchio
-                            // (non più l'ordine "grezzo" restituito dal protocollo, spesso casuale).
+                            // in base alla vera data di scatto quando la conosciamo (altrimenti
+                            // alla data di caricamento sull'HDD, come prima).
                             .thenComparator { a, b ->
                                 if (a.isDirectory && b.isDirectory) a.name.lowercase().compareTo(b.name.lowercase())
-                                else b.lastModified.compareTo(a.lastModified)
+                                else sortDateOf(b).compareTo(sortDateOf(a))
                             }
                     )
                 entries = result
@@ -247,14 +271,14 @@ fun RemoteBrowserContent(
         loading = false
     }
 
-    LaunchedEffect(activeFilter, currentPath) {
+    LaunchedEffect(activeFilter, currentPath, contentDates) {
         val filter = activeFilter
         if (filter == null) return@LaunchedEffect
         filterLoading = true
         withContext(Dispatchers.IO) {
             filteredEntries = runCatching { scanForCategory(client, currentPath, filter) }
                 .getOrDefault(emptyList())
-                .sortedByDescending { it.lastModified } // dal file più recente al più vecchio
+                .sortedByDescending { sortDateOf(it) } // dal file più recente al più vecchio, per data di scatto quando nota
         }
         filterLoading = false
     }

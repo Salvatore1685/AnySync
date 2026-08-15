@@ -23,5 +23,9 @@ data class RemoteFileHashEntity(
     val remotePath: String,
     val size: Long,
     val lastModified: Long,
-    val sha256: String
+    val sha256: String,
+    /** Data di scatto/creazione originale del contenuto (da EXIF o dal file sul telefono prima
+     * dell'upload), usata per ordinare cronologicamente invece che per data di caricamento
+     * sull'HDD. Null per i file caricati prima di questa funzione o senza data disponibile. */
+    val contentDate: Long? = null
 )

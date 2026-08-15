@@ -50,6 +50,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.animation:animation") // transizioni tra schermate nel NavHost
+    implementation("androidx.exifinterface:exifinterface:1.3.7") // lettura data di scatto dalle foto per l'ordinamento cronologico
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.navigation:navigation-compose:2.7.7")

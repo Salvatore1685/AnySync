@@ -129,9 +129,18 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+/** Migrazione dalla versione 7 alla 8: aggiunge la data di scatto/creazione originale alla cache
+ * degli hash, per poter ordinare i file per data reale invece che per data di caricamento
+ * sull'HDD. I file già presenti restano con contentDate null finché non vengono ri-processati. */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE remote_file_hashes ADD COLUMN contentDate INTEGER")
+    }
+}
+
 @Database(
     entities = [SyncProfile::class, SyncLogEntry::class, RemoteFileHashEntity::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -150,7 +159,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "routersync.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .build().also { INSTANCE = it }
             }
     }

@@ -3,6 +3,7 @@ package com.routersync.app.data
 import android.content.Context
 import com.routersync.app.sync.FreeSpaceResult
 import com.routersync.app.sync.SyncEngine
+import com.routersync.app.sync.SyncResult
 import com.routersync.app.work.SyncScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -37,5 +38,10 @@ class SyncProfileRepository(private val context: Context) {
     /** Elimina dal telefono i file già sincronizzati sull'HDD, per liberare spazio su richiesta. */
     suspend fun freeLocalSpace(profile: SyncProfile): FreeSpaceResult = withContext(Dispatchers.IO) {
         SyncEngine(context).freeLocalSpace(profile)
+    }
+
+    /** Cancella la cache hash/date di scatto di un profilo (locale + su HDD), forzando un ricontrollo completo alla sync successiva. */
+    suspend fun clearHashCache(profile: SyncProfile): SyncResult = withContext(Dispatchers.IO) {
+        SyncEngine(context).clearHashCache(profile)
     }
 }

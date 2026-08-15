@@ -107,6 +107,8 @@ fun DashboardScreen(
     val profiles by viewModel.profiles.collectAsState()
     val freeingSpaceProfileId by viewModel.freeingSpaceProfileId.collectAsState()
     val freeSpaceResult by viewModel.freeSpaceResult.collectAsState()
+    val clearingCacheProfileId by viewModel.clearingCacheProfileId.collectAsState()
+    val clearCacheResult by viewModel.clearCacheResult.collectAsState()
     var menuExpanded by remember { mutableStateOf(false) }
     var showAdminPasswordDialog by remember { mutableStateOf(false) }
     var adminPasswordError by remember { mutableStateOf(false) }
@@ -116,6 +118,12 @@ fun DashboardScreen(
         freeSpaceResult?.let { result ->
             snackbarHostState.showSnackbar(result.message)
             viewModel.clearFreeSpaceResult()
+        }
+    }
+    LaunchedEffect(clearCacheResult) {
+        clearCacheResult?.let { result ->
+            snackbarHostState.showSnackbar(result.message)
+            viewModel.clearCacheResultConsumed()
         }
     }
     val context = LocalContext.current
@@ -211,7 +219,9 @@ fun DashboardScreen(
                         onDelete = { viewModel.deleteProfile(profile) },
                         onBrowse = { onBrowseProfile(profile.id) },
                         onFreeSpace = { viewModel.freeLocalSpace(profile) },
-                        freeingSpace = freeingSpaceProfileId == profile.id
+                        freeingSpace = freeingSpaceProfileId == profile.id,
+                        onClearCache = { viewModel.clearHashCache(profile) },
+                        clearingCache = clearingCacheProfileId == profile.id
                     )
                 }
                 item { Spacer(Modifier.height(72.dp)) }
@@ -305,10 +315,13 @@ private fun ProfileCard(
     onDelete: () -> Unit,
     onBrowse: () -> Unit,
     onFreeSpace: () -> Unit,
-    freeingSpace: Boolean
+    freeingSpace: Boolean,
+    onClearCache: () -> Unit,
+    clearingCache: Boolean
 ) {
     val context = LocalContext.current
     var showFreeSpaceConfirm by remember { mutableStateOf(false) }
+    var showClearCacheConfirm by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     var expanded by remember(profile.id) { mutableStateOf(false) }
     val workManager = remember { WorkManager.getInstance(context) }
@@ -512,6 +525,18 @@ private fun ProfileCard(
                             loading = freeingSpace
                         )
                     }
+
+                    Spacer(Modifier.height(8.dp))
+                    PressableScale(
+                        onClick = { if (!clearingCache) showClearCacheConfirm = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedCardButton(
+                            icon = Icons.Default.CleaningServices,
+                            label = if (clearingCache) "Cancellazione cache…" else "Ricontrolla tutti i file da zero",
+                            loading = clearingCache
+                        )
+                    }
                 }
             }
         }
@@ -528,6 +553,24 @@ private fun ProfileCard(
                 TextButton(onClick = { showFreeSpaceConfirm = false; onFreeSpace() }) { Text("Libera memoria") }
             },
             dismissButton = { TextButton(onClick = { showFreeSpaceConfirm = false }) { Text("Annulla") } }
+        )
+    }
+
+    if (showClearCacheConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearCacheConfirm = false },
+            title = { Text("Ricontrollare tutti i file da zero?") },
+            text = {
+                Text(
+                    "Cancella la cache di hash e date di scatto per questa sync (in locale e sull'HDD). " +
+                        "Nessun file verrà toccato o cancellato: solo la prossima sincronizzazione sarà più " +
+                        "lenta del solito, perché dovrà ricalcolare tutto da capo invece di usare i dati già noti."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showClearCacheConfirm = false; onClearCache() }) { Text("Cancella cache") }
+            },
+            dismissButton = { TextButton(onClick = { showClearCacheConfirm = false }) { Text("Annulla") } }
         )
     }
 

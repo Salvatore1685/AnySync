@@ -55,6 +55,7 @@ fun HddGalleryScreen(
         rootBoundaryPath = boundary,
         mode = BrowserMode.VIEW_GALLERY,
         title = if (restrictToSyncFolder) profile.name else "HDD completo (${profile.host})",
-        onClose = onClose
+        onClose = onClose,
+        profileId = profile.id
     )
 }
