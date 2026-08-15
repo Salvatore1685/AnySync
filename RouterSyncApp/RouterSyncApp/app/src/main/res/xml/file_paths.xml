@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Copre l'intera cartella cache dell'app (sia "opened_files" che "shared_files",
+         ed eventuali altre sottocartelle future), evitando errori "failed to find configured root" -->
+    <cache-path name="app_cache" path="." />
+</paths>
