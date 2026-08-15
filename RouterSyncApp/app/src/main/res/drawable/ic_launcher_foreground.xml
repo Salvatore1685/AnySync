@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simbolo dell'icona app "AnySync": un anello sottile (per dare un tocco più distintivo e
+     "badge-like" rispetto a un'icona nuda) più il simbolo di sincronizzazione, ingrandito e
+     centrato correttamente nella zona sicura dell'icona adattiva (per non essere tagliato
+     dalle varie forme di maschera usate dai diversi launcher Android). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Anello sottile semi-trasparente, per dare profondità e un tocco più "logo" -->
+    <path
+        android:pathData="M54,14 a40,40 0 1,1 -0.1,0 z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.35"
+        android:fillColor="#00000000" />
+
+    <!-- Frecce di sincronizzazione, ingrandite e centrate nella zona sicura (66dp centrali) -->
+    <group
+        android:translateX="29"
+        android:translateY="29"
+        android:scaleX="2.0833"
+        android:scaleY="2.0833">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M12,4V1L8,5l4,4V6c3.31,0 6,2.69 6,6c0,1.01 -0.25,1.97 -0.7,2.8l1.46,1.46C19.54,15.03 20,13.57 20,12C20,7.58 16.42,4 12,4zM12,18c-3.31,0 -6,-2.69 -6,-6c0,-1.01 0.25,-1.97 0.7,-2.8L5.24,7.74C4.46,8.97 4,10.43 4,12c0,4.42 3.58,8 8,8v3l4,-4l-4,-4V18z" />
+    </group>
+</vector>
