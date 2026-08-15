@@ -94,6 +94,10 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
 
         checkLowSpaceAndNotify(profile)
 
+        // Aggiorna subito il widget in home screen (se presente) con l'esito appena registrato,
+        // invece di aspettare il prossimo giro automatico ogni 30 minuti.
+        com.routersync.app.widget.SyncStatusWidgetProvider.requestUpdate(applicationContext)
+
         // Per Giornaliera/Settimanale/Mensile, ri-pianifichiamo qui il prossimo avvio preciso
         // (WorkManager non supporta nativamente intervalli allineati a un giorno/ora specifici).
         if (profile.scheduleType == ScheduleType.DAILY ||

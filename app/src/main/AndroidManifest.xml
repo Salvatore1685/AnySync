@@ -63,6 +63,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- Widget per la home screen: mostra lo stato dell'ultima sincronizzazione a colpo d'occhio -->
+        <receiver
+            android:name=".widget.SyncStatusWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/sync_status_widget_info" />
+        </receiver>
+
         <!-- Necessario per condividere con app esterne (lettori PDF, Office, player musicali)
              i file scaricati temporaneamente dall'HDD per la visualizzazione/ascolto -->
         <provider
