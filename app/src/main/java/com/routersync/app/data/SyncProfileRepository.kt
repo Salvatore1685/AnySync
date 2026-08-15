@@ -25,6 +25,9 @@ class SyncProfileRepository(private val context: Context) {
     suspend fun deleteProfile(profile: SyncProfile) {
         scheduler.cancel(profile.id)
         dao.delete(profile)
+        withContext(Dispatchers.IO) {
+            AppDatabase.getInstance(context).remoteFileHashDao().deleteForProfile(profile.id)
+        }
     }
 
     fun runManualSync(profile: SyncProfile) = scheduler.runManualSync(profile)

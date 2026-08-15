@@ -3,11 +3,15 @@ package com.routersync.app.sync
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.routersync.app.data.AppDatabase
+import com.routersync.app.data.RemoteFileHashDao
+import com.routersync.app.data.RemoteFileHashEntity
 import com.routersync.app.data.SyncDirection
 import com.routersync.app.data.SyncProfile
 import com.routersync.app.remote.RemoteClient
 import com.routersync.app.remote.RemoteClientFactory
 import com.routersync.app.remote.RemoteEntry
+import java.security.MessageDigest
 
 data class SyncResult(
     val success: Boolean,
@@ -75,9 +79,29 @@ class SyncEngine(private val context: Context) {
             } else {
                 // Comportamento "solo aggiunta": non cancella mai nulla in automatico
                 if (profile.direction == SyncDirection.UPLOAD_ONLY || profile.direction == SyncDirection.BIDIRECTIONAL) {
-                    val (count, cancelled) = mirrorUpload(client, localRoot, allPath, profile.direction, profile.autoFreeSpaceAfterSync, excluded, "", onProgress, isCancelled)
+                    // Indice di tutti gli hash già presenti in QUALSIASI punto della cartella di
+                    // destinazione (non solo per nome), per riconoscere contenuti duplicati anche
+                    // se si trovano altrove — es. lo stesso file caricato in passato da un altro
+                    // telefono in una sottocartella diversa.
+                    val hashDao = AppDatabase.getInstance(context).remoteFileHashDao()
+                    // Ripopola la cache locale da quella salvata sull'HDD, se presente: utile dopo
+                    // un cambio telefono o una reinstallazione, quando la cache locale è vuota.
+                    seedHashCacheFromHdd(client, hashDao, profile.id, allPath)
+                    val remoteHashIndex = buildRemoteHashIndex(client, hashDao, profile.id, allPath)
+                    val (count, cancelled) = mirrorUpload(
+                        client, localRoot, allPath, profile.direction, profile.autoFreeSpaceAfterSync,
+                        excluded, "", onProgress, isCancelled, hashDao, profile.id, remoteHashIndex
+                    )
                     transferred += count
                     wasCancelled = wasCancelled || cancelled
+                    if (!cancelled) {
+                        // Riporta l'indice aggiornato sull'HDD, così resta disponibile anche se
+                        // in futuro cambi telefono o reinstalli l'app.
+                        RemoteHashIndexFile.write(
+                            client, allPath,
+                            remoteHashIndex.map { (hash, entry) -> RemoteHashIndexFile.Entry(entry.path, entry.size, entry.lastModified, hash) }
+                        )
+                    }
                 }
                 if (!wasCancelled && (profile.direction == SyncDirection.DOWNLOAD_ONLY || profile.direction == SyncDirection.BIDIRECTIONAL)) {
                     val (count, cancelled) = mirrorDownload(client, allPath, localRoot, profile.direction, onProgress, isCancelled)
@@ -232,7 +256,10 @@ class SyncEngine(private val context: Context) {
         excluded: Set<String>,
         localRelativePath: String,
         onProgress: ProgressCallback?,
-        isCancelled: () -> Boolean
+        isCancelled: () -> Boolean,
+        hashDao: RemoteFileHashDao,
+        profileId: Long,
+        remoteHashIndex: MutableMap<String, RemoteEntry>
     ): Pair<Int, Boolean> {
         var transferred = 0
         if (!client.exists(remotePath)) client.mkdirs(remotePath)
@@ -246,7 +273,10 @@ class SyncEngine(private val context: Context) {
             if (isPathExcluded(childRelativePath, excluded)) continue // escluso dall'utente in fase di selezione
 
             if (child.isDirectory) {
-                val (count, cancelled) = mirrorUpload(client, child, joinPath(remotePath, name), direction, autoFreeSpace, excluded, childRelativePath, onProgress, isCancelled)
+                val (count, cancelled) = mirrorUpload(
+                    client, child, joinPath(remotePath, name), direction, autoFreeSpace, excluded,
+                    childRelativePath, onProgress, isCancelled, hashDao, profileId, remoteHashIndex
+                )
                 transferred += count
                 if (cancelled) return transferred to true
             } else {
@@ -254,35 +284,140 @@ class SyncEngine(private val context: Context) {
                 val remoteChild = remoteChildren[name]
                 when {
                     remoteChild == null -> {
-                        context.contentResolver.openInputStream(child.uri)?.use { input ->
-                            client.upload(joinPath(remotePath, name), input, child.length())
+                        // Nessun file con questo nome a destinazione: prima di caricarlo,
+                        // controlliamo se il suo CONTENUTO esiste già altrove nella cartella di
+                        // destinazione (nome o sottocartella diversi) — es. lo stesso file
+                        // caricato in passato da un altro telefono. In tal caso non lo ricarichiamo.
+                        val localHash = hashLocalFile(child)
+                        val existingDuplicate = localHash?.let { remoteHashIndex[it] }
+                        if (existingDuplicate != null) {
+                            if (autoFreeSpace) child.delete()
+                        } else {
+                            val uploadPath = joinPath(remotePath, name)
+                            context.contentResolver.openInputStream(child.uri)?.use { input ->
+                                client.upload(uploadPath, input, child.length())
+                            }
+                            transferred++
+                            if (autoFreeSpace) child.delete()
+                            recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified())
                         }
-                        transferred++
-                        if (autoFreeSpace) child.delete()
                     }
                     remoteChild.size != child.length() -> {
                         // Stesso nome ma dimensione diversa: non è lo stesso file (es. foto
                         // omonime scattate da telefoni diversi). Manteniamo entrambe invece di
                         // sovrascrivere silenziosamente, aggiungendo un suffisso al nuovo arrivo.
                         val uniqueName = uniqueSuffixedName(name, remoteChildren.keys)
+                        val uploadPath = joinPath(remotePath, uniqueName)
+                        val localHash = hashLocalFile(child)
                         context.contentResolver.openInputStream(child.uri)?.use { input ->
-                            client.upload(joinPath(remotePath, uniqueName), input, child.length())
+                            client.upload(uploadPath, input, child.length())
                         }
                         transferred++
                         if (autoFreeSpace) child.delete()
+                        recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, uniqueName, uploadPath, child.length(), child.lastModified())
                     }
                     direction == SyncDirection.BIDIRECTIONAL && child.lastModified() > remoteChild.lastModified -> {
+                        val uploadPath = joinPath(remotePath, name)
+                        val localHash = hashLocalFile(child)
                         context.contentResolver.openInputStream(child.uri)?.use { input ->
-                            client.upload(joinPath(remotePath, name), input, child.length())
+                            client.upload(uploadPath, input, child.length())
                         }
                         transferred++
                         if (autoFreeSpace) child.delete()
+                        recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified())
                     }
                 }
                 if (isCancelled()) return transferred to true
             }
         }
         return transferred to false
+    }
+
+    /** Calcola l'hash SHA-256 di un file locale. Ritorna null in caso di errore di lettura (il file verrà comunque caricato normalmente, solo senza controllo duplicati). */
+    private fun hashLocalFile(file: DocumentFile): String? =
+        FileHasher.sha256(context.contentResolver.openInputStream(file.uri))
+
+    /** Dopo un upload, aggiorna sia l'indice in memoria (per il resto di questa sincronizzazione) sia la cache su DB (per le prossime). */
+    private fun recordUploadedHash(
+        hashDao: RemoteFileHashDao,
+        profileId: Long,
+        remoteHashIndex: MutableMap<String, RemoteEntry>,
+        localHash: String?,
+        name: String,
+        remotePath: String,
+        size: Long,
+        lastModified: Long
+    ) {
+        if (localHash == null) return
+        remoteHashIndex[localHash] = RemoteEntry(name, remotePath, false, lastModified, size)
+        hashDao.upsert(RemoteFileHashEntity(profileId, remotePath, size, lastModified, localHash))
+    }
+
+    /**
+     * Scansiona ricorsivamente tutto il contenuto già presente in [basePath] sul remoto e ne
+     * calcola (o recupera dalla cache) l'hash SHA-256, per costruire l'indice usato dalla
+     * deduplica per contenuto. Alla prima sincronizzazione su una cartella con molti file può
+     * richiedere tempo, perché ogni file va letto per intero; dalle sync successive, i file
+     * invariati (stessa dimensione e data) riusano l'hash già calcolato.
+     */
+    private fun buildRemoteHashIndex(
+        client: RemoteClient,
+        hashDao: RemoteFileHashDao,
+        profileId: Long,
+        basePath: String
+    ): MutableMap<String, RemoteEntry> {
+        val index = mutableMapOf<String, RemoteEntry>()
+        if (client.exists(basePath)) {
+            collectRemoteHashes(client, hashDao, profileId, basePath, index)
+        }
+        return index
+    }
+
+    /**
+     * Ripopola la cache locale (Room) usando l'indice salvato sull'HDD, se presente. Non
+     * sovrascrive un'eventuale voce già presente in cache (che potrebbe già essere aggiornata),
+     * la aggiunge solo se mancante — es. dopo un cambio telefono o una reinstallazione.
+     */
+    private fun seedHashCacheFromHdd(client: RemoteClient, hashDao: RemoteFileHashDao, profileId: Long, basePath: String) {
+        val entries = RemoteHashIndexFile.read(client, basePath)
+        for (entry in entries) {
+            if (hashDao.find(profileId, entry.path) == null) {
+                hashDao.upsert(RemoteFileHashEntity(profileId, entry.path, entry.size, entry.lastModified, entry.sha256))
+            }
+        }
+    }
+
+    private fun collectRemoteHashes(
+        client: RemoteClient,
+        hashDao: RemoteFileHashDao,
+        profileId: Long,
+        path: String,
+        index: MutableMap<String, RemoteEntry>
+    ) {
+        for (entry in client.listFiles(path)) {
+            if (RemoteHashIndexFile.isIndexFileName(entry.name)) continue // file di supporto, non un contenuto sincronizzato
+            if (entry.isDirectory) {
+                collectRemoteHashes(client, hashDao, profileId, entry.path, index)
+            } else {
+                val hash = remoteHash(client, hashDao, profileId, entry)
+                if (hash != null) index.putIfAbsent(hash, entry)
+            }
+        }
+    }
+
+    /** Recupera l'hash di un file remoto dalla cache se dimensione/data coincidono, altrimenti lo ricalcola scaricandolo (senza salvarlo su disco) e aggiorna la cache. */
+    private fun remoteHash(client: RemoteClient, hashDao: RemoteFileHashDao, profileId: Long, entry: RemoteEntry): String? {
+        val cached = hashDao.find(profileId, entry.path)
+        if (cached != null && cached.size == entry.size && cached.lastModified == entry.lastModified) {
+            return cached.sha256
+        }
+        return runCatching {
+            val digest = MessageDigest.getInstance("SHA-256")
+            client.download(entry.path, FileHasher.discardingDigestStream(digest))
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            hashDao.upsert(RemoteFileHashEntity(profileId, entry.path, entry.size, entry.lastModified, hash))
+            hash
+        }.getOrNull() // in caso di errore di lettura del file remoto, semplicemente non entra nel confronto per contenuto
     }
 
     /** Replica ricorsivamente il contenuto remoto di [remotePath] dentro [localDir] (solo aggiunte/aggiornamenti). */
@@ -299,6 +434,7 @@ class SyncEngine(private val context: Context) {
         val localByName = localDir.listFiles().associateBy { it.name ?: "" }
 
         for (remote in remoteChildren) {
+            if (RemoteHashIndexFile.isIndexFileName(remote.name)) continue // file di supporto, non un contenuto sincronizzato
             if (remote.isDirectory) {
                 val localSubDir = localByName[remote.name] as? DocumentFile
                     ?: localDir.createDirectory(remote.name)
@@ -353,6 +489,7 @@ class SyncEngine(private val context: Context) {
 
         for (name in allNames) {
             if (name.isBlank()) continue
+            if (RemoteHashIndexFile.isIndexFileName(name)) continue // file di supporto, non un contenuto sincronizzato
             val relPath = if (relativePrefix.isBlank()) name else "$relativePrefix/$name"
             if (isPathExcluded(relPath, excluded)) continue // escluso dall'utente in fase di selezione
             val localChild = localChildren[name]

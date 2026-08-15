@@ -106,11 +106,39 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
-@Database(entities = [SyncProfile::class, SyncLogEntry::class], version = 6, exportSchema = false)
+/**
+ * Migrazione dalla versione 6 alla 7: crea la tabella di cache degli hash SHA-256 dei file
+ * remoti, usata per la deduplica per contenuto (non solo per nome) durante l'upload. Non tocca
+ * i dati esistenti dei profili o della cronologia.
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS remote_file_hashes (
+                profileId INTEGER NOT NULL,
+                remotePath TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                lastModified INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                PRIMARY KEY(profileId, remotePath)
+            )
+            """
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_remote_file_hashes_profileId_sha256 ON remote_file_hashes(profileId, sha256)")
+    }
+}
+
+@Database(
+    entities = [SyncProfile::class, SyncLogEntry::class, RemoteFileHashEntity::class],
+    version = 7,
+    exportSchema = false
+)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun syncProfileDao(): SyncProfileDao
     abstract fun syncLogDao(): SyncLogDao
+    abstract fun remoteFileHashDao(): RemoteFileHashDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -122,7 +150,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "routersync.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .build().also { INSTANCE = it }
             }
     }
