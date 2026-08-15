@@ -229,7 +229,15 @@ fun RemoteBrowserContent(
         withContext(Dispatchers.IO) {
             try {
                 val result = client.listFiles(currentPath)
-                    .sortedWith(compareByDescending<RemoteEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+                    .sortedWith(
+                        compareByDescending<RemoteEntry> { it.isDirectory }
+                            // Cartelle in ordine alfabetico, file dal più recente al più vecchio
+                            // (non più l'ordine "grezzo" restituito dal protocollo, spesso casuale).
+                            .thenComparator { a, b ->
+                                if (a.isDirectory && b.isDirectory) a.name.lowercase().compareTo(b.name.lowercase())
+                                else b.lastModified.compareTo(a.lastModified)
+                            }
+                    )
                 entries = result
             } catch (e: Exception) {
                 loadError = "Errore nel caricamento: ${e.message}"
@@ -244,7 +252,9 @@ fun RemoteBrowserContent(
         if (filter == null) return@LaunchedEffect
         filterLoading = true
         withContext(Dispatchers.IO) {
-            filteredEntries = runCatching { scanForCategory(client, currentPath, filter) }.getOrDefault(emptyList())
+            filteredEntries = runCatching { scanForCategory(client, currentPath, filter) }
+                .getOrDefault(emptyList())
+                .sortedByDescending { it.lastModified } // dal file più recente al più vecchio
         }
         filterLoading = false
     }

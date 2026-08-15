@@ -62,6 +62,17 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
                     val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                     nm.notify(NOTIFICATION_ID, buildNotification(progressText(current, done, total, syncStartTime), done, total))
                 }
+                // Pubblica lo stesso avanzamento anche su WorkManager, così la card della sync
+                // nell'app può mostrare la stessa percentuale/barra della notifica in tempo reale.
+                runCatching {
+                    setProgressAsync(
+                        androidx.work.workDataOf(
+                            "current" to current,
+                            "done" to done,
+                            "total" to total
+                        )
+                    )
+                }
             },
             isCancelled = { isStopped }
         )

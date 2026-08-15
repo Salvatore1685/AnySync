@@ -1,7 +1,12 @@
 package com.routersync.app.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -19,6 +24,7 @@ import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.FolderOpen
@@ -27,13 +33,13 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -304,6 +310,7 @@ private fun ProfileCard(
     val context = LocalContext.current
     var showFreeSpaceConfirm by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var expanded by remember(profile.id) { mutableStateOf(false) }
     val workManager = remember { WorkManager.getInstance(context) }
     val manualWorkInfos by workManager
         .getWorkInfosForUniqueWorkFlow("sync_profile_${profile.id}_manual")
@@ -313,9 +320,16 @@ private fun ProfileCard(
         .collectAsState(initial = emptyList())
     // Solo RUNNING conta come "in corso": ENQUEUED per una sync pianificata può restare tale
     // per ore (in attesa del prossimo orario), e non deve mostrare l'animazione di caricamento.
-    val isSyncing = (manualWorkInfos + scheduledWorkInfos).any { it.state == WorkInfo.State.RUNNING }
+    val runningWorkInfo = (manualWorkInfos + scheduledWorkInfos).firstOrNull { it.state == WorkInfo.State.RUNNING }
+    val isSyncing = runningWorkInfo != null
     val success = successColor()
     val errorColor = errorSemanticColor()
+
+    // Quando una sync parte, la card si apre da sola per mostrare l'avanzamento — non serve
+    // toccare la freccetta apposta per vedere cosa sta succedendo.
+    LaunchedEffect(isSyncing) {
+        if (isSyncing) expanded = true
+    }
 
     // Spazio libero sull'HDD di questa specifica sync: disponibile solo su SMB, caricato in background
     var freeSpaceGb by remember(profile.id) { mutableStateOf<Double?>(null) }
@@ -338,130 +352,167 @@ private fun ProfileCard(
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
-            freeSpaceGb?.let { gb ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Text(
-                        "%.1f GB liberi su HDD".format(gb),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = if (lowSpace) FontWeight.Bold else FontWeight.Normal,
-                        color = if (lowSpace) errorColor else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-            }
+            // --- Riga sempre visibile, anche a card chiusa: nome, frecce animate, matita, cestino, freccetta ---
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ProtocolAvatar(profile.protocol)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(profile.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(
-                        "${profile.host} → ${profile.remoteBasePath}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                IconButton(onClick = { if (isSyncing) onCancelSync() else onSyncNow() }) {
-                    if (isSyncing) {
-                        Box(contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-                            Icon(Icons.Default.Stop, contentDescription = "Ferma sincronizzazione", modifier = Modifier.size(14.dp))
-                        }
-                    } else {
-                        Icon(Icons.Default.Sync, contentDescription = "Sincronizza ora")
-                    }
-                }
+                Text(
+                    profile.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f).clickable { expanded = !expanded }
+                )
+                AnimatedSyncIcon(isSyncing = isSyncing, onClick = { if (isSyncing) onCancelSync() else onSyncNow() })
                 IconButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = "Modifica")
                 }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, contentDescription = "Elimina", tint = MaterialTheme.colorScheme.error)
                 }
-            }
-
-            Spacer(Modifier.height(10.dp))
-            Divider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(Modifier.height(10.dp))
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.horizontalScroll(rememberScrollState())
-            ) {
-                InfoChip(label = scheduleLabel(profile.scheduleType), color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(6.dp))
-                InfoChip(label = directionLabel(profile.direction), color = MaterialTheme.colorScheme.primary)
-                scheduleTimeLabel(profile)?.let { timeLabel ->
-                    Spacer(Modifier.width(6.dp))
-                    InfoChip(label = timeLabel, color = MaterialTheme.colorScheme.tertiary)
-                }
-                Spacer(Modifier.width(6.dp))
-                InfoChip(label = networkPreferenceLabel(profile.networkPreference), color = MaterialTheme.colorScheme.secondary)
-                if (profile.autoFreeSpaceAfterSync) {
-                    Spacer(Modifier.width(6.dp))
-                    InfoChip(label = "Auto-libera spazio", color = MaterialTheme.colorScheme.secondary)
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(
+                        Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Comprimi i dettagli" else "Espandi i dettagli",
+                        modifier = Modifier.rotate(if (expanded) 180f else 0f)
+                    )
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
-            val lastSync = profile.lastSyncTimestamp?.let {
-                SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(it))
-            } ?: "mai eseguita"
+            AnimatedVisibility(visible = expanded) {
+                Column {
+                    Spacer(Modifier.height(10.dp))
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(Modifier.height(10.dp))
 
-            AnimatedVisibility(visible = isSyncing) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
-                    LinearProgressIndicator(modifier = Modifier.weight(1f).height(3.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Sincronizzazione in corso… (tocca lo stop per interrompere)", style = MaterialTheme.typography.labelSmall)
-                }
-            }
+                    freeSpaceGb?.let { gb ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Text(
+                                "%.1f GB liberi su HDD".format(gb),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (lowSpace) FontWeight.Bold else FontWeight.Normal,
+                                color = if (lowSpace) errorColor else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                    }
 
-            // Pallino di stato + testo, come l'indicatore di connessione in SyncDrive
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val dotColor = when {
-                    profile.lastSyncStatus?.startsWith("OK") == true -> success
-                    profile.lastSyncStatus?.startsWith("In attesa") == true -> MaterialTheme.colorScheme.tertiary
-                    profile.lastSyncStatus != null -> errorColor
-                    else -> MaterialTheme.colorScheme.outline
-                }
-                Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
-                Spacer(Modifier.width(6.dp))
-                Text("Ultima sync: $lastSync", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                IconButton(onClick = { showHistory = true }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.History, contentDescription = "Cronologia", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            profile.lastSyncStatus?.let {
-                val statusColor = when {
-                    it.startsWith("OK") -> success
-                    it.startsWith("In attesa") -> MaterialTheme.colorScheme.tertiary
-                    else -> errorColor
-                }
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    color = statusColor,
-                    modifier = Modifier.padding(start = 14.dp)
-                )
-            }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ProtocolAvatar(profile.protocol)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "${profile.host} → ${profile.remoteBasePath}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
-            Spacer(Modifier.height(14.dp))
-            PressableScale(onClick = onBrowse, modifier = Modifier.fillMaxWidth()) {
-                OutlinedCardButton(
-                    icon = Icons.Default.PhotoLibrary,
-                    label = "Sfoglia file sincronizzati"
-                )
-            }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
+                        InfoChip(label = scheduleLabel(profile.scheduleType), color = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(6.dp))
+                        InfoChip(label = directionLabel(profile.direction), color = MaterialTheme.colorScheme.primary)
+                        scheduleTimeLabel(profile)?.let { timeLabel ->
+                            Spacer(Modifier.width(6.dp))
+                            InfoChip(label = timeLabel, color = MaterialTheme.colorScheme.tertiary)
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        InfoChip(label = networkPreferenceLabel(profile.networkPreference), color = MaterialTheme.colorScheme.secondary)
+                        if (profile.autoFreeSpaceAfterSync) {
+                            Spacer(Modifier.width(6.dp))
+                            InfoChip(label = "Auto-libera spazio", color = MaterialTheme.colorScheme.secondary)
+                        }
+                    }
 
-            Spacer(Modifier.height(8.dp))
-            PressableScale(
-                onClick = { if (!freeingSpace) showFreeSpaceConfirm = true },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                OutlinedCardButton(
-                    icon = Icons.Default.CleaningServices,
-                    label = if (freeingSpace) "Liberazione in corso…" else "Libera memoria dal telefono",
-                    loading = freeingSpace
-                )
+                    Spacer(Modifier.height(10.dp))
+                    val lastSync = profile.lastSyncTimestamp?.let {
+                        SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(it))
+                    } ?: "mai eseguita"
+
+                    if (isSyncing) {
+                        // Stessa percentuale/ETA mostrata nella notifica, letta dal progresso che
+                        // il worker pubblica tramite setProgressAsync — non più solo una barra
+                        // generica "in corso" senza numeri.
+                        val progressData = runningWorkInfo?.progress
+                        val done = progressData?.getInt("done", 0) ?: 0
+                        val total = progressData?.getInt("total", 0) ?: 0
+                        val current = progressData?.getString("current")
+                        Column(Modifier.padding(bottom = 8.dp)) {
+                            if (total > 0) {
+                                val fraction = (done.toFloat() / total).coerceIn(0f, 1f)
+                                LinearProgressIndicator(
+                                    progress = fraction,
+                                    modifier = Modifier.fillMaxWidth().height(4.dp)
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "${current.orEmpty()} ($done/$total · ${(fraction * 100).toInt()}%)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(4.dp))
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Sincronizzazione in corso… (tocca lo stop per interrompere)",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+
+                    // Pallino di stato + testo, come l'indicatore di connessione in SyncDrive
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val dotColor = when {
+                            profile.lastSyncStatus?.startsWith("OK") == true -> success
+                            profile.lastSyncStatus?.startsWith("In attesa") == true -> MaterialTheme.colorScheme.tertiary
+                            profile.lastSyncStatus != null -> errorColor
+                            else -> MaterialTheme.colorScheme.outline
+                        }
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Ultima sync: $lastSync", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { showHistory = true }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.History, contentDescription = "Cronologia", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    profile.lastSyncStatus?.let {
+                        val statusColor = when {
+                            it.startsWith("OK") -> success
+                            it.startsWith("In attesa") -> MaterialTheme.colorScheme.tertiary
+                            else -> errorColor
+                        }
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = statusColor,
+                            modifier = Modifier.padding(start = 14.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+                    PressableScale(onClick = onBrowse, modifier = Modifier.fillMaxWidth()) {
+                        OutlinedCardButton(
+                            icon = Icons.Default.PhotoLibrary,
+                            label = "Sfoglia file sincronizzati"
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    PressableScale(
+                        onClick = { if (!freeingSpace) showFreeSpaceConfirm = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedCardButton(
+                            icon = Icons.Default.CleaningServices,
+                            label = if (freeingSpace) "Liberazione in corso…" else "Libera memoria dal telefono",
+                            loading = freeingSpace
+                        )
+                    }
+                }
             }
         }
     }
@@ -482,6 +533,25 @@ private fun ProfileCard(
 
     if (showHistory) {
         SyncHistoryDialog(profileId = profile.id, onDismiss = { showHistory = false })
+    }
+}
+
+/** Icona di sync che ruota di continuo mentre una sincronizzazione è in corso (le "frecce animate"); da ferma è il tasto per avviarla. */
+@Composable
+private fun AnimatedSyncIcon(isSyncing: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        if (isSyncing) {
+            val infiniteTransition = rememberInfiniteTransition(label = "sync_rotation")
+            val angle by infiniteTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(animation = tween(1000, easing = LinearEasing)),
+                label = "sync_angle"
+            )
+            Icon(Icons.Default.Sync, contentDescription = "Ferma sincronizzazione", modifier = Modifier.rotate(angle))
+        } else {
+            Icon(Icons.Default.Sync, contentDescription = "Sincronizza ora")
+        }
     }
 }
 
