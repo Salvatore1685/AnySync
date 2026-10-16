@@ -44,4 +44,11 @@ interface RemoteClient {
 
     /** Spazio libero (in byte) sulla condivisione remota, se il protocollo lo supporta. Null altrimenti. */
     fun freeSpaceBytes(): Long? = null
+
+    /**
+     * Apre un file remoto a partire dal byte [position], senza scaricare quello che c'è prima.
+     * Serve a leggere solo i pezzi che interessano di un video (per l'anteprima). Null se il
+     * protocollo non lo supporta (es. FTP): chi lo usa deve gestire il caso.
+     */
+    fun openFrom(remotePath: String, position: Long): InputStream? = null
 }

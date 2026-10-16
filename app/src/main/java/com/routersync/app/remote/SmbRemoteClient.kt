@@ -87,6 +87,22 @@ class SmbRemoteClient(
         file.inputStream.use { input -> input.copyTo(output) }
     }
 
+    override fun openFrom(remotePath: String, position: Long): InputStream? {
+        val stream = SmbFile(fileUrl(remotePath), context).inputStream
+        var left = position
+        while (left > 0) {
+            val skipped = stream.skip(left)
+            if (skipped <= 0) break
+            left -= skipped
+        }
+        return if (left == 0L) {
+            stream
+        } else {
+            stream.close()
+            null
+        }
+    }
+
     override fun delete(remotePath: String) {
         val file = SmbFile(fileUrl(remotePath), context)
         if (file.exists()) file.delete()
