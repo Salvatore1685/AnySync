@@ -84,7 +84,7 @@ class SmbRemoteClient(
 
     override fun download(remotePath: String, output: OutputStream) {
         val file = SmbFile(fileUrl(remotePath), context)
-        file.inputStream.use { input -> input.copyTo(output) }
+        file.inputStream.use { input -> input.copyTo(output, 1024 * 1024) }
     }
 
     override fun openFrom(remotePath: String, position: Long): InputStream? {
