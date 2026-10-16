@@ -16,6 +16,20 @@ android {
         versionName = "1.0"
     }
 
+    // Chiave di firma FISSA (file app/anysync-debug.keystore, nel repository). Senza questa,
+    // ogni build su GitHub Actions genera una chiave diversa e Android rifiuta di installare
+    // l'APK sopra la versione precedente ("app non installata"), costringendo a disinstallare
+    // e perdere le sync. Con la chiave fissa gli aggiornamenti si installano sopra senza perdere
+    // nulla. È una chiave per uso personale (sideload), non per la pubblicazione sullo store.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("anysync-debug.keystore")
+            storePassword = "anysync123"
+            keyAlias = "anysync"
+            keyPassword = "anysync123"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
