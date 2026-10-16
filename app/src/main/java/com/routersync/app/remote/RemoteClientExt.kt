@@ -1,11 +1,44 @@
 package com.routersync.app.remote
 
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 
 /** Scarica un file remoto interamente in memoria. Da usare solo per file di dimensioni contenute (es. anteprime foto). */
 fun RemoteClient.downloadBytes(path: String): ByteArray {
     val out = ByteArrayOutputStream()
     download(path, out)
+    return out.toByteArray()
+}
+
+/** Segnale interno per interrompere un download una volta letti abbastanza byte. */
+private class StopDownload : RuntimeException()
+
+/**
+ * Scarica solo i primi [maxBytes] di un file remoto e interrompe subito il trasferimento, senza
+ * leggere il resto. Serve per estrarre l'anteprima incorporata in una foto (sta nei primi KB)
+ * senza scaricare decine di MB. NON usare con FTP: interrompere a metà lascia la connessione
+ * in uno stato incoerente.
+ */
+fun RemoteClient.downloadHead(path: String, maxBytes: Int): ByteArray {
+    val out = ByteArrayOutputStream()
+    val limited = object : OutputStream() {
+        override fun write(b: Int) {
+            if (out.size() >= maxBytes) throw StopDownload()
+            out.write(b)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            val remaining = maxBytes - out.size()
+            if (remaining <= 0) throw StopDownload()
+            out.write(b, off, minOf(len, remaining))
+            if (len >= remaining) throw StopDownload()
+        }
+    }
+    try {
+        download(path, limited)
+    } catch (_: StopDownload) {
+        // Voluto: abbiamo già i byte che ci servivano
+    }
     return out.toByteArray()
 }
 
