@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import androidx.exifinterface.media.ExifInterface
 import android.net.Uri
 import android.webkit.MimeTypeMap
 import android.widget.Toast
@@ -55,6 +57,7 @@ import androidx.core.content.FileProvider
 import com.routersync.app.remote.RemoteClient
 import com.routersync.app.remote.RemoteEntry
 import com.routersync.app.remote.downloadBytes
+import com.routersync.app.remote.downloadHead
 import com.routersync.app.remote.isAudio
 import com.routersync.app.remote.isImage
 import com.routersync.app.remote.isVideo
@@ -62,14 +65,26 @@ import com.routersync.app.sync.FileCategory
 import com.routersync.app.sync.categoryForFileName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
 import java.io.File
 
 /** Modalità del browser: scelta cartella (wizard) oppure semplice consultazione (galleria). */
 enum class BrowserMode { PICK_FOLDER, VIEW_GALLERY }
 
 /** Limite di sicurezza: oltre questa quantità di miniature in cache, la svuotiamo per non accumulare memoria all'infinito. */
-private const val MAX_THUMBNAIL_CACHE = 300
+private const val MAX_THUMBNAIL_CACHE = 200
+
+/** Quanti byte iniziali leggere per estrarre l'anteprima incorporata in una foto (sta nei primi KB). */
+private const val THUMBNAIL_HEAD_BYTES = 512 * 1024
+
+/**
+ * Solo se una foto NON ha un'anteprima incorporata si scarica per intero per ridurla: oltre
+ * questa dimensione si rinuncia e resta l'icona, per non riempire la memoria (20 MB).
+ */
+private const val MAX_THUMBNAIL_FULL_DOWNLOAD_BYTES = 20L * 1024 * 1024
 
 /**
  * Contenuto del browser di rete, riutilizzabile sia dentro il wizard (in un Dialog a schermo
@@ -222,14 +237,27 @@ fun RemoteBrowserContent(
         reloadTrigger++
     }
 
-    fun loadThumbnail(entry: RemoteEntry) {
+    // Pochi download di miniature alla volta: prima partivano tutti insieme man mano che si
+    // scorreva, e ognuno teneva in RAM l'intero file → memoria esaurita e app chiusa da Android.
+    // Con FTP un solo download per volta, perché la libreria non regge richieste parallele sulla
+    // stessa connessione.
+    val thumbnailGate = remember(client) {
+        Semaphore(if (client is com.routersync.app.remote.FtpRemoteClient) 1 else 3)
+    }
+
+    // Funzione sospendibile chiamata dentro LaunchedEffect: se la foto esce dallo schermo prima
+    // che arrivi il suo turno, la richiesta in coda viene annullata invece di accumularsi.
+    suspend fun loadThumbnail(entry: RemoteEntry) {
         if (thumbnailCache.containsKey(entry.path)) return
-        scope.launch(Dispatchers.IO) {
-            val bitmap = runCatching {
-                val bytes = client.downloadBytes(entry.path)
-                decodeSampledBitmap(bytes, 150) // decodifica subito ridotta: i byte grezzi non vengono conservati
-            }.getOrNull()
-            if (thumbnailCache.size > MAX_THUMBNAIL_CACHE) thumbnailCache.clear()
+        thumbnailGate.withPermit {
+            if (thumbnailCache.containsKey(entry.path)) return@withPermit
+            val bitmap = withContext(Dispatchers.IO) {
+                runCatching { buildThumbnail(client, entry) }.getOrNull()
+            }
+            if (thumbnailCache.size >= MAX_THUMBNAIL_CACHE) {
+                // Libera solo le più vecchie invece di svuotare tutto (che faceva rimbalzare le miniature visibili)
+                thumbnailCache.keys.take(MAX_THUMBNAIL_CACHE / 2).forEach { thumbnailCache.remove(it) }
+            }
             thumbnailCache[entry.path] = bitmap
         }
     }
@@ -557,7 +585,7 @@ private fun GalleryGrid(
     thumbnailCache: Map<String, Bitmap?>,
     selectionMode: Boolean,
     selectedPaths: List<String>,
-    onLoadThumbnail: (RemoteEntry) -> Unit,
+    onLoadThumbnail: suspend (RemoteEntry) -> Unit,
     onTap: (RemoteEntry) -> Unit,
     onLongPress: (RemoteEntry) -> Unit
 ) {
@@ -705,7 +733,7 @@ private fun MediaTile(
 private fun RemoteEntryRow(
     entry: RemoteEntry,
     thumbnail: Bitmap?,
-    onLoadThumbnail: () -> Unit,
+    onLoadThumbnail: suspend () -> Unit,
     onClick: () -> Unit
 ) {
     LaunchedEffect(entry.path) {
@@ -917,6 +945,36 @@ private fun formatSize(bytes: Long): String = when {
     bytes >= 1024 -> "%.1f KB".format(bytes / 1024.0)
     else -> "$bytes B"
 }
+
+/**
+ * Costruisce la miniatura di una foto remota senza scaricarla per intero quando possibile:
+ * 1) legge solo i primi KB e usa l'anteprima già incorporata dalla fotocamera (EXIF), che è
+ *    piccola e veloce a prescindere dal peso della foto;
+ * 2) se la foto non ne ha una (PNG, screenshot, ecc.) la scarica e la riduce, ma solo se non è enorme.
+ * FTP salta il punto 1 perché non permette di interrompere un download a metà in sicurezza.
+ */
+private fun buildThumbnail(client: RemoteClient, entry: RemoteEntry): Bitmap? {
+    if (client !is com.routersync.app.remote.FtpRemoteClient) {
+        val head = client.downloadHead(entry.path, THUMBNAIL_HEAD_BYTES)
+        exifThumbnail(head)?.let { return it }
+    }
+    if (entry.size > MAX_THUMBNAIL_FULL_DOWNLOAD_BYTES) return null
+    val bytes = client.downloadBytes(entry.path)
+    return decodeSampledBitmap(bytes, 150) // decodifica subito ridotta: i byte grezzi non vengono conservati
+}
+
+/** Estrae l'anteprima incorporata (EXIF) da un pezzo iniziale di file, già ruotata come la foto. Null se non c'è. */
+private fun exifThumbnail(head: ByteArray): Bitmap? = runCatching {
+    val exif = ExifInterface(ByteArrayInputStream(head))
+    val thumb = exif.thumbnailBitmap ?: return@runCatching null
+    val degrees = exif.rotationDegrees
+    if (degrees == 0) {
+        thumb
+    } else {
+        val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+        Bitmap.createBitmap(thumb, 0, 0, thumb.width, thumb.height, matrix, true)
+    }
+}.getOrNull()
 
 /** Decodifica un'immagine da byte array ridimensionandola, per non caricarla mai a piena risoluzione in memoria. */
 private fun decodeSampledBitmap(data: ByteArray, reqSize: Int): Bitmap? {
