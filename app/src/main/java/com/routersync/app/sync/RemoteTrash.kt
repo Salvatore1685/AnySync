@@ -26,6 +26,27 @@ object RemoteTrash {
 
     fun todayFolder(): String = dayFormat().format(Date())
 
+    /**
+     * Sposta un file nel cestino ([DIR_NAME]/AAAA-MM-GG/percorso relativo) dentro [root].
+     * [root] e [filePath] devono essere nello stesso formato di percorso del [client]. Ritorna
+     * true se spostato; false se non possibile (file fuori da [root], già nel cestino, protocollo
+     * senza spostamento, errore): chi lo usa può ripiegare sulla cancellazione.
+     */
+    fun moveToTrash(client: RemoteClient, root: String, filePath: String): Boolean {
+        val cleanRoot = root.trim('/')
+        val cleanPath = filePath.trim('/')
+        if (cleanRoot.isEmpty() || !cleanPath.startsWith("$cleanRoot/")) return false
+        val relative = cleanPath.removePrefix("$cleanRoot/")
+        if (relative.isEmpty() || relative == DIR_NAME || relative.startsWith("$DIR_NAME/")) return false
+        val lead = if (root.startsWith("/")) "/" else ""
+        val target = "$lead$cleanRoot/$DIR_NAME/${todayFolder()}/$relative"
+        return runCatching {
+            client.mkdirs(target.substringBeforeLast('/'))
+            // se oggi nel cestino c'è già un file con lo stesso nome, riprova con un suffisso
+            client.rename(filePath, target) || client.rename(filePath, target + "." + System.currentTimeMillis())
+        }.getOrDefault(false)
+    }
+
     /** Elimina le cartelle giornaliere del cestino più vecchie di [KEEP_DAYS] giorni. */
     fun purgeOld(client: RemoteClient, root: String) {
         val trashPath = root.trimEnd('/') + "/" + DIR_NAME

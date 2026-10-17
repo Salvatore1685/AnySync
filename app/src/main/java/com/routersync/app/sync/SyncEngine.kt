@@ -70,6 +70,8 @@ class SyncEngine(private val context: Context) {
             if (!client.exists(remoteRelativeRoot)) client.mkdirs(remoteRelativeRoot)
             val allPath = joinPath(remoteRelativeRoot, sanitizeFolderName(profile.name))
             if (!client.exists(allPath)) client.mkdirs(allPath)
+            // Svuota dal cestino dell'HDD ciò che ha più di 7 giorni (a ogni sync, in ogni modalità)
+            runCatching { RemoteTrash.purgeOld(client, allPath) }
 
             var updatedManifest: String? = null
             val excluded = excludedPathSet(profile.excludedPaths)
@@ -97,7 +99,6 @@ class SyncEngine(private val context: Context) {
                 val newManifest = mutableSetOf<String>()
                 // Cestino sull'HDD: i file cancellati dal lato HDD finiscono qui per 7 giorni.
                 trashRoot = allPath
-                runCatching { RemoteTrash.purgeOld(client, allPath) }
                 val (count, cancelled) = mirrorBidirectionalWithDeletes(
                     client, localRoot, allPath, "", previousManifest,
                     profile.autoFreeSpaceAfterSync, excluded, onProgress, isCancelled, newManifest, tracker
@@ -367,6 +368,10 @@ class SyncEngine(private val context: Context) {
                 onProgress?.invoke(name, tracker.done, tracker.total)
                 val remoteChild = remoteChildren[name]
                 when {
+                    remoteChild == null && isDeletedFromHdd(profileId, childRelativePath, child.length()) -> {
+                        // Eliminato apposta dall'HDD (dalla galleria, finito nel cestino): anche se
+                        // sul telefono c'è ancora, non va ricaricato.
+                    }
                     remoteChild == null -> {
                         // Nessun file con questo nome a destinazione: prima di caricarlo,
                         // controlliamo se il suo CONTENUTO esiste già altrove nella cartella di
@@ -716,6 +721,12 @@ class SyncEngine(private val context: Context) {
         }
     }
 
+    private val deletedDao by lazy { AppDatabase.getInstance(context).deletedFileDao() }
+
+    /** True se questo file (stesso percorso relativo e stessa dimensione) è stato eliminato apposta dall'HDD. */
+    private fun isDeletedFromHdd(profileId: Long, relativePath: String, size: Long): Boolean =
+        runCatching { deletedDao.findSize(profileId, relativePath) == size }.getOrDefault(false)
+
     /** Cartella di destinazione della sync in corso, usata come base del cestino. Null = niente cestino. */
     private var trashRoot: String? = null
 
@@ -725,22 +736,7 @@ class SyncEngine(private val context: Context) {
      */
     private fun trashOrDelete(client: RemoteClient, entry: RemoteEntry) {
         val root = trashRoot
-        if (root != null && !entry.isDirectory) {
-            val relative = entry.path.trim('/').removePrefix(root.trim('/')).trim('/')
-            if (relative.isNotEmpty()) {
-                val dayDir = joinPath(root, RemoteTrash.DIR_NAME + "/" + RemoteTrash.todayFolder())
-                val moved = runCatching {
-                    var target = joinPath(dayDir, relative)
-                    client.mkdirs(target.substringBeforeLast('/', dayDir))
-                    if (!client.rename(entry.path, target)) {
-                        // forse esiste già un file con lo stesso nome nel cestino di oggi: riprova con un suffisso
-                        target = joinPath(dayDir, relative) + "." + System.currentTimeMillis()
-                        client.rename(entry.path, target)
-                    } else true
-                }.getOrDefault(false)
-                if (moved) return
-            }
-        }
+        if (root != null && !entry.isDirectory && RemoteTrash.moveToTrash(client, root, entry.path)) return
         client.delete(entry.path)
     }
 
