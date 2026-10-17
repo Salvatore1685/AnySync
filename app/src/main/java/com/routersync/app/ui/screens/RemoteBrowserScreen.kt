@@ -40,11 +40,14 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -71,6 +74,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Modalità del browser: scelta cartella (wizard) oppure semplice consultazione (galleria). */
 enum class BrowserMode { PICK_FOLDER, VIEW_GALLERY }
@@ -226,6 +232,9 @@ fun RemoteBrowserContent(
     var deleting by remember { mutableStateOf(false) }
 
     var activeFilter by remember { mutableStateOf<FileCategory?>(null) }
+    var searchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var playingVideo by remember { mutableStateOf<RemoteEntry?>(null) }
     var filteredEntries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var filterLoading by remember { mutableStateOf(false) }
 
@@ -312,7 +321,19 @@ fun RemoteBrowserContent(
         filterLoading = false
     }
 
-    val displayedEntries = if (activeFilter != null) filteredEntries else entries
+    val baseEntries = if (activeFilter != null) filteredEntries else entries
+    val displayedEntries = remember(baseEntries, searchQuery, contentDates) {
+        if (searchQuery.isBlank()) baseEntries
+        else filterBySearch(baseEntries, searchQuery) { entry -> contentDates[entry.path] ?: entry.lastModified }
+    }
+    // Cambiando cartella la ricerca si azzera
+    LaunchedEffect(currentPath) {
+        searchActive = false
+        searchQuery = ""
+    }
+    // Lo streaming usa la lettura a intervalli, disponibile solo con SMB
+    val canStreamVideo = client is com.routersync.app.remote.SmbRemoteClient ||
+        client is com.routersync.app.remote.SmbBrowserClient
     val imageEntries = remember(displayedEntries) { displayedEntries.filter { it.isImage() } }
 
     fun openExternally(entry: RemoteEntry) {
@@ -334,6 +355,7 @@ fun RemoteBrowserContent(
             when {
                 entry.isDirectory -> currentPath = entry.path
                 entry.isImage() -> viewingImageIndex = imageEntries.indexOfFirst { it.path == entry.path }
+                entry.isVideo() && canStreamVideo -> playingVideo = entry
                 else -> openExternally(entry)
             }
         }
@@ -381,18 +403,37 @@ fun RemoteBrowserContent(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        when {
-                            selectionMode -> "${selectedPaths.size} selezionati"
-                            activeFilter != null -> filterLabel(activeFilter!!)
-                            atBoundaryRoot -> title
-                            else -> currentPath
-                        }
-                    )
+                    if (searchActive) {
+                        val focusRequester = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            singleLine = true,
+                            placeholder = { Text("Nome o data (es. 2024, ottobre)") },
+                            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            )
+                        )
+                    } else {
+                        Text(
+                            when {
+                                selectionMode -> "${selectedPaths.size} selezionati"
+                                activeFilter != null -> filterLabel(activeFilter!!)
+                                atBoundaryRoot -> title
+                                else -> currentPath
+                            }
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = {
                         when {
+                            searchActive -> { searchActive = false; searchQuery = "" }
                             selectionMode -> { selectionMode = false; selectedPaths.clear() }
                             activeFilter != null -> activeFilter = null
                             atBoundaryRoot -> onClose()
@@ -401,12 +442,17 @@ fun RemoteBrowserContent(
                         }
                     }) {
                         Icon(
-                            if (selectionMode || activeFilter != null || atBoundaryRoot) Icons.Default.Close else Icons.Default.ArrowBack,
+                            if (selectionMode || searchActive || activeFilter != null || atBoundaryRoot) Icons.Default.Close else Icons.Default.ArrowBack,
                             contentDescription = "Indietro"
                         )
                     }
                 },
                 actions = {
+                    if (!selectionMode && !searchActive && connected && mode == BrowserMode.VIEW_GALLERY) {
+                        IconButton(onClick = { searchActive = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Cerca")
+                        }
+                    }
                     if (selectionMode) {
                         IconButton(onClick = { downloadMultiple(displayedEntries.filter { selectedPaths.contains(it.path) }) }, enabled = selectedPaths.isNotEmpty()) {
                             Icon(Icons.Default.Download, contentDescription = "Scarica sul telefono")
@@ -422,7 +468,7 @@ fun RemoteBrowserContent(
             )
         },
         floatingActionButton = {
-            if (connected && !selectionMode && activeFilter == null) {
+            if (connected && !selectionMode && !searchActive && activeFilter == null) {
                 FloatingActionButton(onClick = { showNewFolderDialog = true }) {
                     Icon(Icons.Default.Add, contentDescription = "Nuova cartella")
                 }
@@ -452,7 +498,11 @@ fun RemoteBrowserContent(
                     loadError != null -> ErrorState(loadError!!)
                     displayedEntries.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            if (activeFilter != null) "Nessun file trovato per questo tipo" else "Cartella vuota",
+                            when {
+                                searchQuery.isNotBlank() -> "Nessun risultato per \"$searchQuery\""
+                                activeFilter != null -> "Nessun file trovato per questo tipo"
+                                else -> "Cartella vuota"
+                            },
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -475,6 +525,7 @@ fun RemoteBrowserContent(
                                     when {
                                         entry.isDirectory -> currentPath = entry.path
                                         entry.isImage() -> viewingImageIndex = imageEntries.indexOfFirst { it.path == entry.path }
+                                        entry.isVideo() && canStreamVideo -> playingVideo = entry
                                         else -> openExternally(entry)
                                     }
                                 }
@@ -530,6 +581,15 @@ fun RemoteBrowserContent(
         )
     }
 
+    playingVideo?.let { video ->
+        VideoPlayerDialog(
+            client = client,
+            entry = video,
+            onDismiss = { playingVideo = null },
+            onOpenExternally = { playingVideo = null; openExternally(video) }
+        )
+    }
+
     viewingImageIndex?.let { startIndex ->
         ImagePagerViewer(
             client = client,
@@ -539,6 +599,27 @@ fun RemoteBrowserContent(
             onDownload = { entry -> downloadSingle(entry) },
             onDismiss = { viewingImageIndex = null }
         )
+    }
+}
+
+/**
+ * Filtra le voci in base al testo cercato: ogni parola deve comparire nel nome oppure nella data
+ * del file (scritta come 17/10/2026, 2026-10-17 o "17 ottobre 2026"), quindi "2024", "ottobre" o
+ * "12/05" funzionano tutti. Le cartelle si cercano solo per nome.
+ */
+private fun filterBySearch(entries: List<RemoteEntry>, query: String, dateOf: (RemoteEntry) -> Long): List<RemoteEntry> {
+    val tokens = query.lowercase().trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (tokens.isEmpty()) return entries
+    val numeric = SimpleDateFormat("dd/MM/yyyy", Locale.ITALIAN)
+    val iso = SimpleDateFormat("yyyy-MM-dd", Locale.ITALIAN)
+    val words = SimpleDateFormat("d MMMM yyyy", Locale.ITALIAN)
+    return entries.filter { entry ->
+        val name = entry.name.lowercase()
+        val dateText = if (entry.isDirectory) "" else {
+            val date = Date(dateOf(entry))
+            (numeric.format(date) + " " + iso.format(date) + " " + words.format(date)).lowercase()
+        }
+        tokens.all { name.contains(it) || dateText.contains(it) }
     }
 }
 
