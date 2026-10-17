@@ -75,6 +75,7 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -234,6 +235,8 @@ fun RemoteBrowserContent(
     var activeFilter by remember { mutableStateOf<FileCategory?>(null) }
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var filterYear by remember { mutableStateOf<Int?>(null) }
+    var filterMonth by remember { mutableStateOf<Int?>(null) }
     var playingVideo by remember { mutableStateOf<RemoteEntry?>(null) }
     var videoChoice by remember { mutableStateOf<RemoteEntry?>(null) }
     var filteredEntries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
@@ -323,14 +326,44 @@ fun RemoteBrowserContent(
     }
 
     val baseEntries = if (activeFilter != null) filteredEntries else entries
-    val displayedEntries = remember(baseEntries, searchQuery, contentDates) {
-        if (searchQuery.isBlank()) baseEntries
-        else filterBySearch(baseEntries, searchQuery) { entry -> contentDates[entry.path] ?: entry.lastModified }
+    val displayedEntries = remember(baseEntries, searchQuery, filterYear, filterMonth, contentDates) {
+        var list = if (searchQuery.isBlank()) baseEntries
+        else filterBySearch(baseEntries, searchQuery) { entry -> entryFilterDate(entry, contentDates) }
+        val year = filterYear
+        val month = filterMonth
+        if (year != null || month != null) {
+            val cal = Calendar.getInstance()
+            // Con un filtro per data le cartelle (che non hanno una data) non vengono mostrate
+            list = list.filter { entry ->
+                if (entry.isDirectory) return@filter false
+                cal.timeInMillis = entryFilterDate(entry, contentDates)
+                (year == null || cal.get(Calendar.YEAR) == year) &&
+                    (month == null || cal.get(Calendar.MONTH) + 1 == month)
+            }
+        }
+        list
+    }
+    // Anni e mesi realmente presenti nei file di questa vista, per proporre solo scelte che danno risultati
+    val availableYears = remember(baseEntries, contentDates) {
+        val cal = Calendar.getInstance()
+        baseEntries.filter { !it.isDirectory }.map { entry ->
+            cal.timeInMillis = entryFilterDate(entry, contentDates)
+            cal.get(Calendar.YEAR)
+        }.distinct().sortedDescending()
+    }
+    val availableMonths = remember(baseEntries, filterYear, contentDates) {
+        val cal = Calendar.getInstance()
+        baseEntries.filter { !it.isDirectory }.mapNotNull { entry ->
+            cal.timeInMillis = entryFilterDate(entry, contentDates)
+            if (filterYear == null || cal.get(Calendar.YEAR) == filterYear) cal.get(Calendar.MONTH) + 1 else null
+        }.distinct().sorted()
     }
     // Cambiando cartella la ricerca si azzera
     LaunchedEffect(currentPath) {
         searchActive = false
         searchQuery = ""
+        filterYear = null
+        filterMonth = null
     }
     // Lo streaming usa la lettura a intervalli, disponibile solo con SMB
     val canStreamVideo = client is com.routersync.app.remote.SmbRemoteClient ||
@@ -434,7 +467,7 @@ fun RemoteBrowserContent(
                 navigationIcon = {
                     IconButton(onClick = {
                         when {
-                            searchActive -> { searchActive = false; searchQuery = "" }
+                            searchActive -> { searchActive = false; searchQuery = ""; filterYear = null; filterMonth = null }
                             selectionMode -> { selectionMode = false; selectedPaths.clear() }
                             activeFilter != null -> activeFilter = null
                             atBoundaryRoot -> onClose()
@@ -492,6 +525,16 @@ fun RemoteBrowserContent(
             if (showFilterBar) {
                 FilterChipsBar(activeFilter = activeFilter, onFilterSelected = { activeFilter = it })
             }
+            if (searchActive) {
+                DateFilterRow(
+                    years = availableYears,
+                    months = availableMonths,
+                    year = filterYear,
+                    month = filterMonth,
+                    onYear = { filterYear = it },
+                    onMonth = { filterMonth = it }
+                )
+            }
             Box(Modifier.fillMaxSize()) {
                 when {
                     connectionError != null -> ErrorState(connectionError!!)
@@ -501,6 +544,7 @@ fun RemoteBrowserContent(
                         Text(
                             when {
                                 searchQuery.isNotBlank() -> "Nessun risultato per \"$searchQuery\""
+                                filterYear != null || filterMonth != null -> "Nessun file per il periodo scelto"
                                 activeFilter != null -> "Nessun file trovato per questo tipo"
                                 else -> "Cartella vuota"
                             },
@@ -614,6 +658,82 @@ fun RemoteBrowserContent(
             onDownload = { entry -> downloadSingle(entry) },
             onDismiss = { viewingImageIndex = null }
         )
+    }
+}
+
+private val FILENAME_DATE = Regex("""(?<!\d)(?:19|20)\d{2}[-_.]?(?:0[1-9]|1[0-2])[-_.]?(?:0[1-9]|[12]\d|3[01])(?!\d)""")
+private val FILENAME_DATE_PARTS = Regex("""((?:19|20)\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])""")
+
+private val MONTH_NAMES = listOf(
+    "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno",
+    "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"
+)
+
+/**
+ * Data scritta nel nome del file, se c'è: i telefoni usano nomi come IMG_20240512_143022.jpg,
+ * PXL_20240512_..., VID-20240512-WA0001.mp4 o Screenshot_2024-05-12-.... Null se non si trova.
+ */
+private fun dateFromFileName(name: String): Long? {
+    val whole = FILENAME_DATE.find(name) ?: return null
+    val parts = FILENAME_DATE_PARTS.find(whole.value) ?: return null
+    val (year, month, day) = parts.destructured
+    return runCatching {
+        Calendar.getInstance().apply {
+            clear()
+            set(year.toInt(), month.toInt() - 1, day.toInt(), 12, 0, 0)
+        }.timeInMillis
+    }.getOrNull()
+}
+
+/** Data da usare per cercare/filtrare: quella nel nome del file, altrimenti la data di scatto salvata, altrimenti quella sull'HDD. */
+private fun entryFilterDate(entry: RemoteEntry, contentDates: Map<String, Long>): Long =
+    dateFromFileName(entry.name) ?: contentDates[entry.path] ?: entry.lastModified
+
+@Composable
+private fun DateFilterRow(
+    years: List<Int>,
+    months: List<Int>,
+    year: Int?,
+    month: Int?,
+    onYear: (Int?) -> Unit,
+    onMonth: (Int?) -> Unit
+) {
+    var yearMenu by remember { mutableStateOf(false) }
+    var monthMenu by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box {
+            FilterChip(
+                selected = year != null,
+                onClick = { yearMenu = true },
+                label = { Text(year?.toString() ?: "Anno") }
+            )
+            DropdownMenu(expanded = yearMenu, onDismissRequest = { yearMenu = false }) {
+                DropdownMenuItem(text = { Text("Tutti gli anni") }, onClick = { onYear(null); yearMenu = false })
+                years.forEach { y ->
+                    DropdownMenuItem(text = { Text(y.toString()) }, onClick = { onYear(y); yearMenu = false })
+                }
+            }
+        }
+        Box {
+            FilterChip(
+                selected = month != null,
+                onClick = { monthMenu = true },
+                label = { Text(month?.let { MONTH_NAMES[it - 1] } ?: "Mese") }
+            )
+            DropdownMenu(expanded = monthMenu, onDismissRequest = { monthMenu = false }) {
+                DropdownMenuItem(text = { Text("Tutti i mesi") }, onClick = { onMonth(null); monthMenu = false })
+                months.forEach { m ->
+                    DropdownMenuItem(text = { Text(MONTH_NAMES[m - 1]) }, onClick = { onMonth(m); monthMenu = false })
+                }
+            }
+        }
+        if (year != null || month != null) {
+            TextButton(onClick = { onYear(null); onMonth(null) }) { Text("Azzera") }
+        }
     }
 }
 
