@@ -1,5 +1,6 @@
 package com.routersync.app.ui.screens
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,7 +20,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.routersync.app.data.AppDatabase
+import androidx.documentfile.provider.DocumentFile
 import com.routersync.app.data.AppSettings
+import com.routersync.app.data.AutoBackup
 import com.routersync.app.data.ProfileBackup
 import com.routersync.app.data.SyncProfileRepository
 import kotlinx.coroutines.launch
@@ -39,6 +42,11 @@ fun SettingsScreen(onClose: () -> Unit) {
     var notifEnabled by remember { mutableStateOf(settings.lowSpaceNotificationsEnabled) }
     var snoozeUntil by remember { mutableStateOf(settings.lowSpaceNotificationSnoozeUntil) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var staleEnabled by remember { mutableStateOf(settings.staleSyncNotificationsEnabled) }
+    var autoBackupEnabled by remember { mutableStateOf(settings.autoBackupEnabled) }
+    var backupFolderUri by remember { mutableStateOf(settings.autoBackupFolderUri) }
+    var lastAutoBackup by remember { mutableStateOf(settings.lastAutoBackupTimestamp) }
+    var backupStatus by remember { mutableStateOf<String?>(null) }
 
     val successfulSyncs by db.syncLogDao().observeSuccessfulSyncCount().collectAsState(initial = 0)
     val totalFilesTransferred by db.syncLogDao().observeTotalFilesTransferred().collectAsState(initial = 0)
@@ -76,6 +84,25 @@ fun SettingsScreen(onClose: () -> Unit) {
             }.onFailure {
                 statusMessage = "Errore durante l'importazione: ${it.message}"
             }
+        }
+    }
+
+    val backupFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+        settings.autoBackupFolderUri = uri.toString()
+        settings.autoBackupEnabled = true
+        backupFolderUri = uri.toString()
+        autoBackupEnabled = true
+        scope.launch {
+            runCatching { AutoBackup.run(context) }
+                .onSuccess { count -> backupStatus = "Backup creato: $count sync salvate" }
+                .onFailure { backupStatus = "Backup non riuscito: ${it.message}" }
+            lastAutoBackup = settings.lastAutoBackupTimestamp
         }
     }
 
@@ -156,6 +183,99 @@ fun SettingsScreen(onClose: () -> Unit) {
                 modifier = Modifier.padding(top = 6.dp)
             )
             statusMessage?.let { msg ->
+                Spacer(Modifier.height(8.dp))
+                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+                    Text(msg, modifier = Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            SectionDivider()
+
+            // --- Avviso sync ferma ---
+            SectionTitle("Avviso se una sync si ferma")
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Text("Avvisami", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Ricevi una notifica se una sync pianificata non riesce da più del previsto " +
+                            "(per una giornaliera: oltre un giorno e mezzo). Controllo ogni 12 ore, al massimo un avviso al giorno per sync.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = staleEnabled,
+                    onCheckedChange = {
+                        staleEnabled = it
+                        settings.staleSyncNotificationsEnabled = it
+                    }
+                )
+            }
+
+            SectionDivider()
+
+            // --- Backup automatico ---
+            SectionTitle("Backup automatico")
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Text("Salva le sync ogni settimana", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Scrive il file ${AutoBackup.FILE_NAME} nella cartella scelta (sovrascrivendo il precedente). " +
+                            "Contiene le password in chiaro: scegli una cartella privata.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = autoBackupEnabled,
+                    onCheckedChange = { on ->
+                        if (on && backupFolderUri == null) {
+                            backupFolderLauncher.launch(null)
+                        } else {
+                            autoBackupEnabled = on
+                            settings.autoBackupEnabled = on
+                        }
+                    }
+                )
+            }
+            backupFolderUri?.let { uriString ->
+                val folderName = remember(uriString) {
+                    runCatching { DocumentFile.fromTreeUri(context, Uri.parse(uriString))?.name }.getOrNull()
+                        ?: "Cartella scelta"
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Cartella: $folderName",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    if (lastAutoBackup > 0L)
+                        "Ultimo backup: ${SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(lastAutoBackup))}"
+                    else "Nessun backup ancora eseguito",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = { backupFolderLauncher.launch(null) }, modifier = Modifier.weight(1f)) {
+                    Text(if (backupFolderUri == null) "Scegli cartella" else "Cambia cartella")
+                }
+                if (backupFolderUri != null) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                runCatching { AutoBackup.run(context) }
+                                    .onSuccess { count -> backupStatus = "Backup creato: $count sync salvate" }
+                                    .onFailure { backupStatus = "Backup non riuscito: ${it.message}" }
+                                lastAutoBackup = settings.lastAutoBackupTimestamp
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Esegui ora") }
+                }
+            }
+            backupStatus?.let { msg ->
                 Spacer(Modifier.height(8.dp))
                 Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
                     Text(msg, modifier = Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
