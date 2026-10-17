@@ -28,6 +28,7 @@ class SyncProfileRepository(private val context: Context) {
         dao.delete(profile)
         withContext(Dispatchers.IO) {
             AppDatabase.getInstance(context).remoteFileHashDao().deleteForProfile(profile.id)
+            AppDatabase.getInstance(context).deletedFileDao().deleteForProfile(profile.id)
         }
     }
 
