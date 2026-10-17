@@ -95,6 +95,9 @@ class SyncEngine(private val context: Context) {
                 val previousManifest = profile.lastSyncManifest
                     ?.split("\n")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
                 val newManifest = mutableSetOf<String>()
+                // Cestino sull'HDD: i file cancellati dal lato HDD finiscono qui per 7 giorni.
+                trashRoot = allPath
+                runCatching { RemoteTrash.purgeOld(client, allPath) }
                 val (count, cancelled) = mirrorBidirectionalWithDeletes(
                     client, localRoot, allPath, "", previousManifest,
                     profile.autoFreeSpaceAfterSync, excluded, onProgress, isCancelled, newManifest, tracker
@@ -685,7 +688,7 @@ class SyncEngine(private val context: Context) {
                     remoteChild != null && localChild == null -> {
                         if (wasKnownBefore) {
                             // era sincronizzato, ora manca in locale -> cancellato lì: elimina anche sul remoto
-                            client.delete(remoteChild.path)
+                            trashOrDelete(client, remoteChild)
                         } else {
                             val targetFile = localDir.createFile(guessMimeType(name), name)
                             targetFile?.let { doc ->
@@ -707,6 +710,36 @@ class SyncEngine(private val context: Context) {
     private fun deleteRemoteRecursively(client: RemoteClient, entry: RemoteEntry) {
         if (entry.isDirectory) {
             client.listFiles(entry.path).forEach { deleteRemoteRecursively(client, it) }
+            client.delete(entry.path)
+        } else {
+            trashOrDelete(client, entry)
+        }
+    }
+
+    /** Cartella di destinazione della sync in corso, usata come base del cestino. Null = niente cestino. */
+    private var trashRoot: String? = null
+
+    /**
+     * Sposta un file remoto nel cestino (`.anysync_trash/AAAA-MM-GG/percorso`); se non è possibile
+     * (protocollo senza spostamento, errore) lo cancella come prima, così la sync non si blocca.
+     */
+    private fun trashOrDelete(client: RemoteClient, entry: RemoteEntry) {
+        val root = trashRoot
+        if (root != null && !entry.isDirectory) {
+            val relative = entry.path.trim('/').removePrefix(root.trim('/')).trim('/')
+            if (relative.isNotEmpty()) {
+                val dayDir = joinPath(root, RemoteTrash.DIR_NAME + "/" + RemoteTrash.todayFolder())
+                val moved = runCatching {
+                    var target = joinPath(dayDir, relative)
+                    client.mkdirs(target.substringBeforeLast('/', dayDir))
+                    if (!client.rename(entry.path, target)) {
+                        // forse esiste già un file con lo stesso nome nel cestino di oggi: riprova con un suffisso
+                        target = joinPath(dayDir, relative) + "." + System.currentTimeMillis()
+                        client.rename(entry.path, target)
+                    } else true
+                }.getOrDefault(false)
+                if (moved) return
+            }
         }
         client.delete(entry.path)
     }

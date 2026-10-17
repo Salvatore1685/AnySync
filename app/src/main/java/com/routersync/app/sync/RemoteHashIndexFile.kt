@@ -66,7 +66,7 @@ object RemoteHashIndexFile {
     }
 
     /** Vero se [name] è il file indice stesso, da escludere sempre dalla normale sincronizzazione dei contenuti. */
-    fun isIndexFileName(name: String): Boolean = name == FILE_NAME
+    fun isIndexFileName(name: String): Boolean = name == FILE_NAME || name == RemoteTrash.DIR_NAME
 
     private fun pathFor(basePath: String): String = if (basePath.isBlank()) FILE_NAME else "$basePath/$FILE_NAME"
 }
