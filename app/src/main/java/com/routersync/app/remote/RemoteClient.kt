@@ -51,4 +51,10 @@ interface RemoteClient {
      * protocollo non lo supporta (es. FTP): chi lo usa deve gestire il caso.
      */
     fun openFrom(remotePath: String, position: Long): InputStream? = null
+
+    /**
+     * Sposta/rinomina un file remoto. Ritorna true se riuscito, false se non supportato o fallito
+     * (chi lo usa deve prevedere un'alternativa). Serve al cestino sull'HDD.
+     */
+    fun rename(fromPath: String, toPath: String): Boolean = false
 }

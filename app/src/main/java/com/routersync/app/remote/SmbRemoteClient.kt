@@ -103,6 +103,13 @@ class SmbRemoteClient(
         }
     }
 
+    override fun rename(fromPath: String, toPath: String): Boolean = try {
+        SmbFile(fileUrl(fromPath), context).renameTo(SmbFile(fileUrl(toPath), context))
+        true
+    } catch (e: Exception) {
+        false
+    }
+
     override fun delete(remotePath: String) {
         val file = SmbFile(fileUrl(remotePath), context)
         if (file.exists()) file.delete()

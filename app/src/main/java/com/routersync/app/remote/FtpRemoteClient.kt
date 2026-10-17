@@ -77,6 +77,9 @@ class FtpRemoteClient(
         ftp.retrieveFile(remotePath, output)
     }
 
+    override fun rename(fromPath: String, toPath: String): Boolean =
+        runCatching { ftp.rename(fromPath, toPath) }.getOrDefault(false)
+
     override fun delete(remotePath: String) {
         ftp.deleteFile(remotePath)
     }
