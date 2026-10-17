@@ -25,7 +25,9 @@ import com.routersync.app.data.AppSettings
 import com.routersync.app.data.AutoBackup
 import com.routersync.app.data.ProfileBackup
 import com.routersync.app.data.SyncProfileRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -48,6 +50,7 @@ fun SettingsScreen(onClose: () -> Unit) {
     var lastAutoBackup by remember { mutableStateOf(settings.lastAutoBackupTimestamp) }
     var backupStatus by remember { mutableStateOf<String?>(null) }
 
+    val deletedCount by db.deletedFileDao().observeCount().collectAsState(initial = 0)
     val successfulSyncs by db.syncLogDao().observeSuccessfulSyncCount().collectAsState(initial = 0)
     val totalFilesTransferred by db.syncLogDao().observeTotalFilesTransferred().collectAsState(initial = 0)
     val recentErrors by db.syncLogDao().observeRecentErrors().collectAsState(initial = emptyList())
@@ -189,6 +192,25 @@ fun SettingsScreen(onClose: () -> Unit) {
                 }
             }
 
+            SectionDivider()
+
+            // --- File eliminati dall'HDD ---
+            SectionTitle("File eliminati dall'HDD")
+            Text(
+                "Quando elimini un file dalla galleria dell'HDD, la sync ricorda che l'hai tolto apposta e " +
+                    "non lo ricarica dal telefono. File ricordati: $deletedCount.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (deletedCount > 0) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { runCatching { db.deletedFileDao().deleteAll() } }
+                        statusMessage = "Elenco azzerato: alla prossima sync i file ancora sul telefono verranno ricaricati"
+                    }
+                }) { Text("Dimentica l'elenco (ricarica alla prossima sync)") }
+            }
             SectionDivider()
 
             // --- Avviso sync ferma ---

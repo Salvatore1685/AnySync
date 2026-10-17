@@ -121,7 +121,10 @@ fun RemoteBrowserContent(
     onClose: () -> Unit,
     /** Se presente, l'ordinamento usa la data di scatto/creazione originale salvata per questo
      * profilo (invece della sola data di caricamento sull'HDD), quando disponibile. */
-    profileId: Long? = null
+    profileId: Long? = null,
+    /** Cartella di destinazione della sync (nel formato dei percorsi di [client]): se presente, i file
+     * eliminati da qui vanno nel cestino dell'HDD e la sync non li ricarica più dal telefono. */
+    syncRootPath: String? = null
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -406,7 +409,7 @@ fun RemoteBrowserContent(
         deleting = true
         scope.launch(Dispatchers.IO) {
             for (entry in toDelete) {
-                runCatching { deleteRecursively(client, entry) }
+                runCatching { deleteWithTrash(context, client, entry, syncRootPath, profileId) }
             }
             withContext(Dispatchers.Main) {
                 selectedPaths.clear()
@@ -611,10 +614,17 @@ fun RemoteBrowserContent(
             title = { Text("Eliminare ${selectedPaths.size} elementi?") },
             text = {
                 Text(
-                    if (folderCount > 0)
-                        "Verranno eliminati definitivamente i file e le cartelle selezionati, incluso tutto il contenuto delle cartelle. L'operazione non può essere annullata."
-                    else
-                        "I file selezionati verranno eliminati definitivamente dall'HDD. L'operazione non può essere annullata."
+                    when {
+                        syncRootPath != null ->
+                            "I file della cartella sincronizzata vengono spostati nel cestino dell'HDD (cartella .anysync_trash) " +
+                                "e dopo 7 giorni eliminati definitivamente. La sync non li ricaricherà dal telefono, anche se lì " +
+                                "ci sono ancora. I file fuori da quella cartella vengono eliminati subito, senza cestino." +
+                                (if (folderCount > 0) " Vale anche per il contenuto delle cartelle selezionate." else "")
+                        folderCount > 0 ->
+                            "Verranno eliminati definitivamente i file e le cartelle selezionati, incluso tutto il contenuto delle cartelle. L'operazione non può essere annullata."
+                        else ->
+                            "I file selezionati verranno eliminati definitivamente dall'HDD. L'operazione non può essere annullata."
+                    }
                 )
             },
             confirmButton = {
@@ -1162,6 +1172,39 @@ private suspend fun shareFilesExternally(context: Context, client: RemoteClient,
                 Toast.makeText(context, "Errore nella condivisione: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+}
+
+/**
+ * Elimina [entry] dall'HDD. I file dentro la cartella sincronizzata ([syncRoot]) vanno nel
+ * cestino e viene ricordato che sono stati eliminati apposta (così la sync non li ricarica dal
+ * telefono); gli altri, o se lo spostamento non è possibile, vengono cancellati.
+ */
+private fun deleteWithTrash(context: Context, client: RemoteClient, entry: RemoteEntry, syncRoot: String?, profileId: Long?) {
+    if (entry.isDirectory) {
+        for (child in client.listFiles(entry.path)) deleteWithTrash(context, client, child, syncRoot, profileId)
+        client.delete(entry.path)
+        return
+    }
+    val cleanRoot = syncRoot?.trim('/')
+    val cleanPath = entry.path.trim('/')
+    val relative = if (cleanRoot != null && cleanRoot.isNotEmpty() && cleanPath.startsWith("$cleanRoot/"))
+        cleanPath.removePrefix("$cleanRoot/") else null
+    val insideTrash = relative != null &&
+        (relative == com.routersync.app.sync.RemoteTrash.DIR_NAME || relative.startsWith(com.routersync.app.sync.RemoteTrash.DIR_NAME + "/"))
+
+    if (syncRoot != null && relative != null && !insideTrash) {
+        val moved = com.routersync.app.sync.RemoteTrash.moveToTrash(client, syncRoot, entry.path)
+        if (!moved) client.delete(entry.path)
+        if (profileId != null) {
+            runCatching {
+                com.routersync.app.data.AppDatabase.getInstance(context).deletedFileDao().upsert(
+                    com.routersync.app.data.DeletedFileEntity(profileId, relative, entry.size, System.currentTimeMillis())
+                )
+            }
+        }
+    } else {
+        client.delete(entry.path)
     }
 }
 

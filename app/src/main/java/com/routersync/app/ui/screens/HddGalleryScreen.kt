@@ -49,6 +49,9 @@ fun HddGalleryScreen(
     val startPath = if (restrictToSyncFolder) profile.remoteBasePath else ""
     val boundary = if (restrictToSyncFolder) profile.remoteBasePath else ""
 
+    // Cartella di destinazione vera della sync (cartella scelta + nome della sync), nel formato dei percorsi della galleria
+    val syncRoot = profile.remoteBasePath.trimEnd('/') + "/" + com.routersync.app.sync.sanitizeFolderName(profile.name)
+
     RemoteBrowserContent(
         client = client,
         initialPath = startPath,
@@ -56,6 +59,7 @@ fun HddGalleryScreen(
         mode = BrowserMode.VIEW_GALLERY,
         title = if (restrictToSyncFolder) profile.name else "HDD completo (${profile.host})",
         onClose = onClose,
-        profileId = profile.id
+        profileId = profile.id,
+        syncRootPath = syncRoot
     )
 }
