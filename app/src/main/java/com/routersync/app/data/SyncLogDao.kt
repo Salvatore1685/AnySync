@@ -35,6 +35,10 @@ interface SyncLogDao {
     """)
     suspend fun trimOldEntries(profileId: Long, keep: Int = 50)
 
+    /** Momento dell'ultima sincronizzazione riuscita di un profilo, o null se non ce n'è mai stata una registrata. */
+    @Query("SELECT MAX(timestamp) FROM sync_log_entries WHERE profileId = :profileId AND success = 1")
+    suspend fun lastSuccessTimestamp(profileId: Long): Long?
+
     @Query("DELETE FROM sync_log_entries WHERE profileId = :profileId")
     suspend fun deleteForProfile(profileId: Long)
 }
