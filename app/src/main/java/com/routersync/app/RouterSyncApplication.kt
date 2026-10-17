@@ -1,11 +1,22 @@
 package com.routersync.app
 
 import android.app.Application
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import com.routersync.app.work.MaintenanceWorker
+import java.util.concurrent.TimeUnit
 
 class RouterSyncApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        // Il database e WorkManager si inizializzano lazy al primo utilizzo (vedi AppDatabase.getInstance
-        // e WorkManager.getInstance), quindi qui non serve fare nulla di esplicito.
+        // Il database si inizializza lazy al primo utilizzo. Qui registriamo solo il controllo
+        // periodico (avviso "sync ferma" + backup automatico): KEEP lo lascia com'è se già pianificato.
+        runCatching {
+            val request = PeriodicWorkRequestBuilder<MaintenanceWorker>(12, TimeUnit.HOURS).build()
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                MaintenanceWorker.UNIQUE_NAME, ExistingPeriodicWorkPolicy.KEEP, request
+            )
+        }
     }
 }
