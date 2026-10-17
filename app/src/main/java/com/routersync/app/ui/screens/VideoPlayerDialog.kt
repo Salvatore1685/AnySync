@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -23,7 +24,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.routersync.app.remote.RemoteClient
 import com.routersync.app.remote.RemoteEntry
-import com.routersync.app.remote.RemoteMediaDataSource
+import com.routersync.app.remote.StreamingMediaDataSource
 import kotlinx.coroutines.delay
 
 /**
@@ -40,7 +41,7 @@ fun VideoPlayerDialog(
     onOpenExternally: () -> Unit
 ) {
     val player = remember { MediaPlayer() }
-    val source = remember(entry.path) { RemoteMediaDataSource(client, entry.path, entry.size, 1024 * 1024) }
+    val source = remember(entry.path) { StreamingMediaDataSource(client, entry.path, entry.size) }
 
     var prepared by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(false) }
@@ -51,12 +52,15 @@ fun VideoPlayerDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var controlsVisible by remember { mutableStateOf(true) }
     var started by remember { mutableStateOf(false) }
+    var stalled by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         onDispose {
             runCatching { player.setDisplay(null) }
-            runCatching { player.release() }
-            runCatching { source.close() }
+            // Prima si sblocca la sorgente (non blocca mai), poi si rilascia il lettore fuori dal
+            // thread principale: release() può attendere una lettura di rete ancora in corso.
+            source.close()
+            Thread { runCatching { player.release() } }.start()
         }
     }
 
@@ -90,8 +94,17 @@ fun VideoPlayerDialog(
 
     // Aggiorna la posizione mentre il video va (si ferma durante il trascinamento della barra)
     LaunchedEffect(prepared) {
+        var last = -1
+        var sameCount = 0
         while (prepared) {
-            if (!dragging) positionMs = runCatching { player.currentPosition }.getOrDefault(positionMs)
+            if (!dragging) {
+                val now = runCatching { player.currentPosition }.getOrDefault(positionMs)
+                // Se il video dovrebbe andare ma la posizione non avanza, sta aspettando i dati dalla rete
+                sameCount = if (playing && now == last) sameCount + 1 else 0
+                last = now
+                stalled = sameCount >= 2
+                positionMs = now
+            }
             delay(500)
         }
     }
@@ -134,6 +147,10 @@ fun VideoPlayerDialog(
                 CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             }
 
+            if (stalled && playing && error == null) {
+                CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+            }
+
             error?.let { message ->
                 Column(
                     Modifier.align(Alignment.Center).padding(24.dp),
@@ -160,6 +177,10 @@ fun VideoPlayerDialog(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    // Sempre a disposizione: se lo streaming si blocca si può passare a un'altra app
+                    IconButton(onClick = onOpenExternally) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = "Apri con un'altra app", tint = Color.White)
+                    }
                 }
             }
 

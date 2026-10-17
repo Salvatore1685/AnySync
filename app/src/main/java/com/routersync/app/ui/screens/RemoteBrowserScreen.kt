@@ -235,6 +235,7 @@ fun RemoteBrowserContent(
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var playingVideo by remember { mutableStateOf<RemoteEntry?>(null) }
+    var videoChoice by remember { mutableStateOf<RemoteEntry?>(null) }
     var filteredEntries by remember { mutableStateOf<List<RemoteEntry>>(emptyList()) }
     var filterLoading by remember { mutableStateOf(false) }
 
@@ -355,7 +356,7 @@ fun RemoteBrowserContent(
             when {
                 entry.isDirectory -> currentPath = entry.path
                 entry.isImage() -> viewingImageIndex = imageEntries.indexOfFirst { it.path == entry.path }
-                entry.isVideo() && canStreamVideo -> playingVideo = entry
+                entry.isVideo() && canStreamVideo -> videoChoice = entry
                 else -> openExternally(entry)
             }
         }
@@ -525,7 +526,7 @@ fun RemoteBrowserContent(
                                     when {
                                         entry.isDirectory -> currentPath = entry.path
                                         entry.isImage() -> viewingImageIndex = imageEntries.indexOfFirst { it.path == entry.path }
-                                        entry.isVideo() && canStreamVideo -> playingVideo = entry
+                                        entry.isVideo() && canStreamVideo -> videoChoice = entry
                                         else -> openExternally(entry)
                                     }
                                 }
@@ -578,6 +579,20 @@ fun RemoteBrowserContent(
                 }
             },
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Annulla") } }
+        )
+    }
+
+    videoChoice?.let { video ->
+        AlertDialog(
+            onDismissRequest = { videoChoice = null },
+            title = { Text(video.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = { Text("Come vuoi guardare il video?\n\nIn streaming parte subito; con un'altra app viene scaricato per intero prima di aprirsi.") },
+            confirmButton = {
+                TextButton(onClick = { videoChoice = null; playingVideo = video }) { Text("In streaming") }
+            },
+            dismissButton = {
+                TextButton(onClick = { videoChoice = null; openExternally(video) }) { Text("Con un'altra app") }
+            }
         )
     }
 
