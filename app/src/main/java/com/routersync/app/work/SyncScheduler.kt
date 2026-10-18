@@ -6,7 +6,9 @@ import com.routersync.app.data.AppDatabase
 import com.routersync.app.data.NetworkPreference
 import com.routersync.app.data.ScheduleType
 import com.routersync.app.data.SyncProfile
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
@@ -158,6 +160,24 @@ class SyncScheduler(private val context: Context) {
     private fun persistWorkId(profileId: Long, workId: String) {
         val dao = AppDatabase.getInstance(context).syncProfileDao()
         runBlocking { dao.updateWorkRequestId(profileId, workId) }
+    }
+
+    /**
+     * Autoriparazione: se una sync pianificata non ha più nessun avvio in programma (catena
+     * spezzata da un errore, da una chiusura forzata, da un aggiornamento...), la ricrea.
+     * Va chiamata fuori dal thread principale.
+     */
+    suspend fun ensureScheduled() = withContext(Dispatchers.IO) {
+        val dao = AppDatabase.getInstance(context).syncProfileDao()
+        dao.getAllOnce().forEach { profile ->
+            if (profile.scheduleType == ScheduleType.MANUAL) return@forEach
+            val infos = runCatching { workManager.getWorkInfosForUniqueWork(uniqueWorkName(profile.id)).get() }
+                .getOrNull() ?: emptyList()
+            val alive = infos.any {
+                it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.BLOCKED
+            }
+            if (!alive) schedule(profile)
+        }
     }
 
     /** Ripristina tutte le pianificazioni salvate: usato dopo un riavvio del dispositivo. */

@@ -29,7 +29,51 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         private const val LOW_SPACE_NOTIFICATION_ID_BASE = 10_000
     }
 
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    override suspend fun doWork(): Result {
+        return try {
+            runSync()
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            handleCrash(e)
+        }
+    }
+
+    /**
+     * Rete di sicurezza: se la sync va in errore imprevisto, lo registriamo nella cronologia
+     * (così si vede il motivo) e soprattutto ri-pianifichiamo il prossimo avvio, altrimenti la
+     * catena delle sync giornaliere si spezzerebbe in silenzio.
+     */
+    private suspend fun handleCrash(e: Throwable): Result = withContext(Dispatchers.IO) {
+        val profileId = inputData.getLong(KEY_PROFILE_ID, -1L)
+        val message = "Errore imprevisto: ${e.javaClass.simpleName}${e.message?.let { " - $it" } ?: ""}"
+        runCatching {
+            val db = AppDatabase.getInstance(applicationContext)
+            val profile = db.syncProfileDao().getById(profileId)
+            if (profile != null) {
+                db.syncProfileDao().updateSyncResult(profile.id, System.currentTimeMillis(), message)
+                db.syncLogDao().insert(
+                    com.routersync.app.data.SyncLogEntry(
+                        profileId = profile.id,
+                        timestamp = System.currentTimeMillis(),
+                        success = false,
+                        cancelled = false,
+                        message = message,
+                        filesTransferred = 0
+                    )
+                )
+                if (profile.scheduleType == ScheduleType.DAILY ||
+                    profile.scheduleType == ScheduleType.WEEKLY ||
+                    profile.scheduleType == ScheduleType.MONTHLY
+                ) {
+                    SyncScheduler(applicationContext).schedulePrecise(profile)
+                }
+            }
+        }
+        Result.success()
+    }
+
+    private suspend fun runSync(): Result = withContext(Dispatchers.IO) {
         val profileId = inputData.getLong(KEY_PROFILE_ID, -1L)
         if (profileId == -1L) return@withContext Result.failure()
 
@@ -50,7 +94,10 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             return@withContext Result.retry()
         }
 
-        setForeground(createForegroundInfo("Avvio sincronizzazione…"))
+        // Da Android 12 il sistema può rifiutare l'avvio della notifica in primo piano quando la
+        // sync parte di notte in background: in quel caso proseguiamo comunque, senza notifica,
+        // invece di far fallire tutta la sincronizzazione.
+        runCatching { setForeground(createForegroundInfo("Avvio sincronizzazione…")) }
 
         val syncStartTime = System.currentTimeMillis()
         val engine = SyncEngine(applicationContext)
