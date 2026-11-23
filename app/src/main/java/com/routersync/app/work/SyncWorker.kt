@@ -3,7 +3,9 @@ package com.routersync.app.work
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -101,7 +103,7 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
 
         val syncStartTime = System.currentTimeMillis()
         val engine = SyncEngine(applicationContext)
-        val result = engine.run(
+        val result = withSyncLocks { engine.run(
             profile = profile,
             onProgress = { current, done, total ->
                 // Aggiorna la notifica con il progresso (best-effort, non blocca in caso di errore)
@@ -122,7 +124,7 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
                 }
             },
             isCancelled = { isStopped }
-        )
+        ) }
 
         dao.updateSyncResult(
             id = profile.id,
@@ -169,6 +171,31 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             result.cancelled -> Result.success() // interrotto volontariamente: non va ritentato in automatico
             result.success -> Result.success()
             else -> Result.retry()
+        }
+    }
+
+    /**
+     * Tiene sveglia la CPU e il Wi-Fi per tutta la durata della sync: senza, di notte il telefono
+     * può addormentare la rete a metà trasferimento ("Transport error reading response").
+     * I blocchi hanno un timeout di sicurezza e vengono sempre rilasciati.
+     */
+    @Suppress("DEPRECATION")
+    private fun <T> withSyncLocks(block: () -> T): T {
+        val wakeLock = runCatching {
+            (applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AnySync:sync")
+                .apply { setReferenceCounted(false); acquire(3 * 60 * 60 * 1000L) }
+        }.getOrNull()
+        val wifiLock = runCatching {
+            (applicationContext.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+                .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "AnySync:wifi")
+                .apply { setReferenceCounted(false); acquire() }
+        }.getOrNull()
+        try {
+            return block()
+        } finally {
+            runCatching { if (wifiLock?.isHeld == true) wifiLock.release() }
+            runCatching { if (wakeLock?.isHeld == true) wakeLock.release() }
         }
     }
 
