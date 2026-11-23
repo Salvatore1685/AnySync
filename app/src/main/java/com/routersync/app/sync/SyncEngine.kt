@@ -61,6 +61,9 @@ class SyncEngine(private val context: Context) {
         var wasCancelled = false
         try {
             client.connect()
+            // Se il router/HDD non risponde subito (rete appena risvegliata, disco in standby),
+            // aspettiamo e riproviamo prima di dichiarare la sync fallita.
+            awaitServerReachable(client, isCancelled)
 
             val localRoot = DocumentFile.fromTreeUri(context, Uri.parse(profile.localFolderUri))
                 ?: return SyncResult(false, "Impossibile accedere alla cartella locale: permesso mancante", 0)
@@ -387,9 +390,7 @@ class SyncEngine(private val context: Context) {
                             if (contentDate != null) hashDao.setContentDateIfMissing(profileId, existingDuplicate.path, contentDate)
                         } else {
                             val uploadPath = joinPath(remotePath, name)
-                            context.contentResolver.openInputStream(child.uri)?.use { input ->
-                                client.upload(uploadPath, input, child.length())
-                            }
+                            uploadWithRetry(client, uploadPath, child, isCancelled)
                             transferred++
                             if (autoFreeSpace) child.delete()
                             recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified(), contentDate)
@@ -403,9 +404,7 @@ class SyncEngine(private val context: Context) {
                         val uploadPath = joinPath(remotePath, uniqueName)
                         val localHash = hashLocalFile(child)
                         val contentDate = captureDateMillis(child)
-                        context.contentResolver.openInputStream(child.uri)?.use { input ->
-                            client.upload(uploadPath, input, child.length())
-                        }
+                        uploadWithRetry(client, uploadPath, child, isCancelled)
                         transferred++
                         if (autoFreeSpace) child.delete()
                         recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, uniqueName, uploadPath, child.length(), child.lastModified(), contentDate)
@@ -414,9 +413,7 @@ class SyncEngine(private val context: Context) {
                         val uploadPath = joinPath(remotePath, name)
                         val localHash = hashLocalFile(child)
                         val contentDate = captureDateMillis(child)
-                        context.contentResolver.openInputStream(child.uri)?.use { input ->
-                            client.upload(uploadPath, input, child.length())
-                        }
+                        uploadWithRetry(client, uploadPath, child, isCancelled)
                         transferred++
                         if (autoFreeSpace) child.delete()
                         recordUploadedHash(hashDao, profileId, remoteHashIndex, localHash, name, uploadPath, child.length(), child.lastModified(), contentDate)
@@ -665,9 +662,7 @@ class SyncEngine(private val context: Context) {
                 when {
                     localChild != null && remoteChild != null -> {
                         if (localChild.lastModified() > remoteChild.lastModified) {
-                            context.contentResolver.openInputStream(localChild.uri)?.use { input ->
-                                client.upload(joinPath(remotePath, name), input, localChild.length())
-                            }
+                            uploadWithRetry(client, joinPath(remotePath, name), localChild, isCancelled)
                             transferred++
                         } else if (remoteChild.lastModified > localChild.lastModified()) {
                             context.contentResolver.openOutputStream(localChild.uri)?.use { output ->
@@ -682,9 +677,7 @@ class SyncEngine(private val context: Context) {
                             // era sincronizzato, ora manca sul remoto -> cancellato lì: elimina anche in locale
                             localChild.delete()
                         } else {
-                            context.contentResolver.openInputStream(localChild.uri)?.use { input ->
-                                client.upload(joinPath(remotePath, name), input, localChild.length())
-                            }
+                            uploadWithRetry(client, joinPath(remotePath, name), localChild, isCancelled)
                             transferred++
                             newManifest += relPath
                             if (autoFreeSpace) localChild.delete()
@@ -738,6 +731,67 @@ class SyncEngine(private val context: Context) {
         val root = trashRoot
         if (root != null && !entry.isDirectory && RemoteTrash.moveToTrash(client, root, entry.path)) return
         client.delete(entry.path)
+    }
+
+    /** Pause (secondi) prima di ogni nuovo tentativo: in tutto circa 5 minuti di pazienza. */
+    private val retryDelaysSec = longArrayOf(10, 30, 90, 180)
+
+    /** Dorme [seconds] secondi a piccoli passi, uscendo subito se l'utente ferma la sync. */
+    private fun sleepInterruptible(seconds: Long, isCancelled: () -> Boolean) {
+        var left = seconds
+        while (left > 0 && !isCancelled()) {
+            Thread.sleep(1000)
+            left--
+        }
+    }
+
+    /**
+     * Verifica che il server risponda; se no, aspetta e riprova (router appena risvegliato,
+     * HDD in standby). Dopo l'ultimo tentativo non lancia nulla: sarà la prima operazione
+     * vera a fallire con il suo messaggio d'errore reale.
+     */
+    private fun awaitServerReachable(client: RemoteClient, isCancelled: () -> Boolean) {
+        for (attempt in 0..retryDelaysSec.size) {
+            try {
+                client.listFiles("")
+                return
+            } catch (e: Exception) {
+                if (attempt == retryDelaysSec.size || isCancelled()) return
+                sleepInterruptible(retryDelaysSec[attempt], isCancelled)
+                runCatching { client.reconnect() }
+            }
+        }
+    }
+
+    /**
+     * Carica un file con nuovi tentativi: se la connessione cade, riapre la sessione, aspetta
+     * e ricarica il file da capo (il caricamento è atomico grazie al file ".part", quindi non
+     * restano mezzi file). Se alla fine fallisce, l'errore indica quale file e di che peso.
+     */
+    private fun uploadWithRetry(
+        client: RemoteClient,
+        remotePath: String,
+        file: DocumentFile,
+        isCancelled: () -> Boolean
+    ) {
+        var lastError: Exception? = null
+        for (attempt in 0..retryDelaysSec.size) {
+            try {
+                val stream = context.contentResolver.openInputStream(file.uri) ?: return
+                stream.use { client.upload(remotePath, it, file.length()) }
+                return
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt == retryDelaysSec.size || isCancelled()) break
+                sleepInterruptible(retryDelaysSec[attempt], isCancelled)
+                runCatching { client.reconnect() }
+            }
+        }
+        val mb = file.length() / 1_048_576.0
+        throw java.io.IOException(
+            "${file.name} (%.1f MB): ${lastError?.message}".format(mb),
+            lastError
+        )
     }
 
     private fun joinPath(base: String, sub: String): String = if (base.isBlank()) sub else "$base/$sub"
