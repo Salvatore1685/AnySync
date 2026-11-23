@@ -23,6 +23,14 @@ class SmbRemoteClient(
 ) : RemoteClient {
 
     private lateinit var context: CIFSContext
+    private var baseContext: BaseContext? = null
+
+    private companion object {
+        /** Buffer di copia in upload: 1 MB (prima 8 KB = una richiesta SMB per ogni 8 KB). */
+        const val UPLOAD_BUFFER = 1024 * 1024
+        /** Suffisso dei file in caricamento: il nome definitivo compare solo a copia completata. */
+        const val PART_SUFFIX = ".part"
+    }
 
     override fun connect() {
         val props = Properties().apply {
@@ -32,15 +40,18 @@ class SmbRemoteClient(
             setProperty("jcifs.smb.client.minVersion", "SMB202")
             setProperty("jcifs.smb.client.maxVersion", "SMB311")
         }
-        val baseContext = BaseContext(PropertyConfiguration(props))
-        context = baseContext.withCredentials(
+        val base = BaseContext(PropertyConfiguration(props))
+        baseContext = base
+        context = base.withCredentials(
             NtlmPasswordAuthenticator("", username, password)
         )
     }
 
     override fun disconnect() {
-        // jcifs-ng non richiede una disconnessione esplicita: le SmbFile sono stateless
-        // e la sessione viene chiusa automaticamente dal pool interno.
+        // Chiude le connessioni del pool interno (se la versione di jcifs lo supporta), così
+        // dopo una caduta di rete la riconnessione riparte da una sessione pulita.
+        runCatching { (baseContext as? AutoCloseable)?.close() }
+        baseContext = null
     }
 
     /** URL di una cartella: termina sempre con "/", come richiesto da jcifs per le directory. */
@@ -56,7 +67,7 @@ class SmbRemoteClient(
     override fun listFiles(remotePath: String): List<RemoteEntry> {
         val dir = SmbFile(dirUrl(remotePath), context)
         if (!dir.exists()) return emptyList()
-        return dir.listFiles().map { f ->
+        return dir.listFiles().filter { !it.name.trimEnd('/').endsWith(PART_SUFFIX) }.map { f ->
             val name = f.name.trimEnd('/')
             RemoteEntry(
                 name = name,
@@ -76,10 +87,23 @@ class SmbRemoteClient(
     override fun exists(remotePath: String): Boolean =
         SmbFile(dirUrl(remotePath), context).exists()
 
+    /**
+     * Carica prima su "<nome>.part" e rinomina solo a copia completata: se la connessione cade
+     * a metà, sull'HDD non resta mai un file troncato col nome definitivo (che la sync
+     * successiva scambierebbe per "stesso nome, dimensione diversa" e duplicherebbe).
+     */
     override fun upload(remotePath: String, input: InputStream, length: Long) {
-        val file = SmbFile(fileUrl(remotePath), context)
-        file.parent?.let { SmbFile(it, context).takeIf { p -> !p.exists() }?.mkdirs() }
-        file.outputStream.use { out -> input.copyTo(out) }
+        val target = SmbFile(fileUrl(remotePath), context)
+        target.parent?.let { SmbFile(it, context).takeIf { p -> !p.exists() }?.mkdirs() }
+        val tmp = SmbFile(fileUrl(remotePath) + PART_SUFFIX, context)
+        try {
+            tmp.outputStream.use { out -> input.copyTo(out, UPLOAD_BUFFER) }
+            if (target.exists()) target.delete()
+            tmp.renameTo(target)
+        } catch (e: Exception) {
+            runCatching { if (tmp.exists()) tmp.delete() }
+            throw e
+        }
     }
 
     override fun download(remotePath: String, output: OutputStream) {

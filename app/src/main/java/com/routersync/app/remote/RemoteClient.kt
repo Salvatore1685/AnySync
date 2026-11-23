@@ -24,6 +24,12 @@ interface RemoteClient {
     /** Chiude la connessione e libera le risorse. */
     fun disconnect()
 
+    /** Chiude e riapre la connessione: usato dopo una caduta di rete per ripartire da zero. */
+    fun reconnect() {
+        runCatching { disconnect() }
+        connect()
+    }
+
     /** Elenca il contenuto di una cartella remota (path relativo alla root configurata). */
     fun listFiles(remotePath: String): List<RemoteEntry>
 
